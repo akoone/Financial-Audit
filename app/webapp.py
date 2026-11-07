@@ -198,6 +198,13 @@ def acc_json(a: Account, balance: Decimal, value: Decimal, user: User) -> dict:
 def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
     app = FastAPI(title="Money tracker", docs_url=None, redoc_url=None, openapi_url=None)
 
+    @app.exception_handler(Exception)
+    async def server_error(request: Request, exc: Exception):
+        # Full details go to the server log; the app shows a short reference to report.
+        log.exception("Error in %s %s", request.method, request.url.path, exc_info=exc)
+        return JSONResponse({"detail": f"Server error ({type(exc).__name__}). Details are in the server log."},
+                            status_code=500)
+
     @app.get("/", response_class=PlainTextResponse)
     async def root():
         return "Money tracker bot is running. Open it in Telegram."
