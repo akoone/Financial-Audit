@@ -32,7 +32,7 @@ For a free server, follow **[DEPLOY.md](DEPLOY.md)** (Oracle Cloud Always Free, 
 
 1. **Create the bot.** In Telegram, open @BotFather, send `/newbot`, and copy the token.
 2. **Optional: an AI key** at https://console.anthropic.com (prepaid credit; separate from a Claude Pro subscription). Without it the bot still works, and receipts are read with free OCR; AI alerts, AI advice and questions are off.
-3. **Configure.** Run `cp .env.example .env`, then fill in `BOT_TOKEN` and `ANTHROPIC_API_KEY`.
+3. **Get the code and configure.** Run `git clone https://github.com/akoone/Financial-Audit.git finance-bot && cd finance-bot`, then `cp .env.example .env`, and fill in `BOT_TOKEN` (plus `ANTHROPIC_API_KEY` and `DATABASE_URL` if you use them).
 4. **Run it with one of these options:**
    - **Docker (recommended on a server):** `docker compose up -d --build` starts the bot with PostgreSQL.
    - **Plain Python (for trying it out):**

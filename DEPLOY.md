@@ -32,19 +32,11 @@ exit
 
 Connect again with the same `ssh` command so the permission takes effect.
 
-## 4. Upload the bot
-
-From **your computer**, in the folder containing `finance-bot.zip`, run:
+## 4. Get the bot code (on the server)
 
 ```bash
-scp -i oracle.key finance-bot.zip ubuntu@YOUR_IP:~
-```
-
-Then **on the server**:
-
-```bash
-sudo apt-get install -y unzip
-unzip finance-bot.zip && cd finance-bot
+git clone https://github.com/akoone/Financial-Audit.git finance-bot
+cd finance-bot
 cp .env.example .env
 nano .env
 ```
@@ -58,9 +50,10 @@ ANTHROPIC_API_KEY=                # optional; empty = free OCR for receipts, no 
 AI_MODEL=claude-haiku-5-5         # cheapest model, if you add a key
 DEFAULT_TIMEZONE=Asia/Tashkent
 DEFAULT_CURRENCY=UZS
+DATABASE_URL=                     # empty = bundled PostgreSQL; or paste your Neon connection string
 ```
 
-Save with `Ctrl+O`, then `Enter`, then `Ctrl+X`. You don't need to change `DATABASE_URL`, because Docker Compose points the bot at its own PostgreSQL automatically.
+Save with `Ctrl+O`, then `Enter`, then `Ctrl+X`. If `DATABASE_URL` is empty, Docker Compose points the bot at its own PostgreSQL automatically. For Neon, see "Using Neon" below.
 
 ## 5. Start it
 
@@ -89,7 +82,7 @@ Neon's free plan pauses the database after a few minutes without use. The bot's 
 | --- | --- |
 | See logs | `docker compose logs -f bot` |
 | Restart | `docker compose restart bot` |
-| Update after you get new code | upload the new zip, unzip over the folder, then `docker compose up -d --build` |
+| Update to the latest version | `git pull && docker compose up -d --build` |
 | Back up the database | `docker compose exec -T db pg_dump -U finance finance > backup_$(date +%F).sql` |
 | Restore a backup | `docker compose exec -T db psql -U finance finance < backup_2026-11-07.sql` |
 | Stop | `docker compose down` (your data stays in the `pgdata` volume) |
