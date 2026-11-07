@@ -216,7 +216,8 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
 
     @app.api_route("/health", methods=["GET", "HEAD"])
     async def health():
-        return {"ok": True}  # never touches the database, so pings don't keep it awake
+        # never touches the database, so pings don't keep it awake
+        return {"ok": True, "receipts": "ai" if get_settings().ai_enabled else ocr.describe()}
 
     # ---------- profile & setup ----------
 
@@ -225,6 +226,7 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
         settings = get_settings()
         base = {"ai": settings.ai_enabled, "scan": settings.ai_enabled or ocr.available(),
                 "storage": db.describe(), "account_types": ACCOUNT_TYPES,
+                "reader": f"AI ({settings.ai_model})" if settings.ai_enabled else f"Free: {ocr.describe()}",
                 "timezones": sorted(_timezones())}
         if ctx.user is None:
             return {"exists": False, "name": ctx.tg.get("first_name", ""), "currencies": COMMON_CURRENCIES,

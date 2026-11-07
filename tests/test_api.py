@@ -194,7 +194,7 @@ async def test_settings_and_files(client, s):
     assert (await client.post("/api/settings", json={"timezone": "Mars/Base"})).status_code == 422
     assert (await client.post("/api/settings", json={"reports": [{"kind": "daily", "time": "25:00"}]})).status_code == 422
     assert (await client.post("/api/send", json={"what": "backup"})).status_code == 503  # no bot in this test
-    assert (await client.get("/")).status_code == 200 and (await client.get("/health")).json() == {"ok": True}
+    assert (await client.get("/")).status_code == 200 and (await client.get("/health")).json()["ok"] is True
     assert (await client.get("/app")).headers["cache-control"] == "no-cache"
 
 

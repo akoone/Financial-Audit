@@ -44,6 +44,13 @@ def tesseract_available() -> bool:
     return shutil.which("tesseract") is not None
 
 
+def describe() -> str:
+    """Which free readers are on, for the app's settings and /health."""
+    parts = (["OCR.space"] if get_settings().ocr_space_api_key else []) + \
+        (["Tesseract"] if tesseract_available() else [])
+    return " + ".join(parts) or "off"
+
+
 def available() -> bool:
     return bool(get_settings().ocr_space_api_key) or tesseract_available()
 

@@ -1154,6 +1154,7 @@ function renderMore() {
     <div class="section-title">Where your data lives</div>
     <div class="card small">
       <div class="kv"><span class="k">Database</span><span>${esc(m.storage)}</span></div>
+      <div class="kv"><span class="k">Receipt reader</span><span>${esc(m.reader || "")}</span></div>
       <div class="muted" style="margin-top:6px">Every new entry, edit and deletion is logged, and a record of all balances is saved every night,
         so old statements never change. To delete everything, send <b>/deleteme</b> in the chat.</div></div>`;
   $("#st-prev", el).onclick = () => { S.stmtMonth = addMonths(S.stmtMonth, -1); loadStatement(); };
