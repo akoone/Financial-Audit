@@ -88,6 +88,16 @@
   .chip.add { background: transparent; box-shadow: inset 0 0 0 1px var(--sep); color: var(--link); }
   .label-row { display: flex; justify-content: space-between; align-items: baseline; }
   .label-row .link { margin: 0 4px 6px; padding: 0; }
+  .cam { position: fixed; inset: 0; z-index: 60; background: #000; display: none; flex-direction: column; }
+  .cam.open { display: flex; }
+  .cam video { flex: 1; min-height: 0; width: 100%; object-fit: cover; background: #000; }
+  .cam .frame { position: absolute; inset: 12% 8% 22%; border: 2px solid rgba(255,255,255,.75); border-radius: 16px; pointer-events: none; }
+  .cam .hint { position: absolute; top: calc(env(safe-area-inset-top) + 16px); left: 0; right: 0; text-align: center; color: #fff;
+               font-size: 15px; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+  .cam .cam-bar { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 18px 28px calc(env(safe-area-inset-bottom) + 22px); background: #000; }
+  .cam .cam-bar button { border: 0; background: none; color: #fff; font-size: 16px; min-width: 64px; min-height: 44px; }
+  .cam .shutter { width: 72px; height: 72px; border-radius: 50%; background: #fff !important; box-shadow: 0 0 0 4px #000, 0 0 0 7px #fff; min-width: 72px !important; }
+  .cam .shutter:active { transform: scale(.94); }
   input.chip.date { font: inherit; font-size: 14px; color: inherit; min-height: 34px; }
 
   .row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 0; border: 0;
@@ -250,6 +260,13 @@
 </nav>
 
 <div class="backdrop" id="backdrop"></div>
+<div class="cam" id="cam" role="dialog" aria-modal="true" aria-label="Camera">
+  <video id="cam-video" playsinline muted autoplay></video><div class="frame"></div>
+  <div class="hint">Fit the whole check inside the frame</div>
+  <div class="cam-bar"><button type="button" id="cam-close">Cancel</button>
+    <button type="button" class="shutter" id="cam-shot" aria-label="Take photo"></button>
+    <button type="button" id="cam-gallery">Gallery</button></div>
+</div>
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="grab"></div><div id="sheet-body"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -352,9 +369,9 @@ function confirmAsk(text, okLabel = "Delete") {
 }
 function updateBack() {
   if (!ver("6.1")) return;
-  if (sheetOpen() || S.view !== "home") tg.BackButton.show(); else tg.BackButton.hide();
+  if (camStream || sheetOpen() || S.view !== "home") tg.BackButton.show(); else tg.BackButton.hide();
 }
-function goBack() { if (sheetOpen()) closeSheet(); else show("home"); }
+function goBack() { if (camStream) closeCamera(); else if (sheetOpen()) closeSheet(); else show("home"); }
 function errorCard(msg) { return `<div class="card"><b>Couldn't load</b><div class="muted small" style="margin-top:4px">${esc(msg)}</div></div>`; }
 function tokens() {
   const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim();
@@ -767,9 +784,9 @@ function renderAdd() {
       ${a.type === "transfer" ? `<span class="cur">${esc(acc ? acc.currency : "")}</span>` : `<select id="a-cur" aria-label="Currency">${curOptions(a.currency)}</select>`}
     </div>
     ${S.me.scan && a.type !== "transfer" ? `<div class="btn-row" id="a-scan">
-        <button class="btn secondary" id="a-pick">🧾 Add a check or receipt</button></div>
-      <div class="muted small" id="a-scan-note" style="margin:6px 4px 0">Take a photo or pick one from your gallery (receipt, or a Click, Payme or bank app screenshot): the form fills in for you.</div>
-      <input type="file" id="a-file" accept="image/*" hidden>` : ""}
+        <button class="btn secondary" id="a-cam">📷 Take a photo</button><button class="btn secondary" id="a-pick">🖼 From gallery</button></div>
+      <div class="muted small" id="a-scan-note" style="margin:6px 4px 0">Photo of a check or receipt, or a Click, Payme or bank app screenshot: the form fills in for you.</div>
+      <input type="file" id="a-file" accept="image/*" hidden><input type="file" id="a-file-cam" accept="image/*" capture="environment" hidden>` : ""}
     ${a.type !== "transfer" ? `<div class="field"><div class="label-row"><span class="label">Category</span><button type="button" class="link small" id="a-cat-edit">Edit categories</button></div>
       <div class="chips" id="a-cats">${cats.map(x => `<button type="button" class="chip ${x.id === a.category_id ? "on" : ""}" data-cat="${x.id}">${esc(x.emoji)} ${esc(x.name)}</button>`).join("")}<button type="button" class="chip add" id="a-cat-new">＋ New</button></div></div>` : ""}
     <div class="field"><span class="label">${a.type === "transfer" ? "From" : a.type === "income" ? "Into account" : "Paid from"}</span><div class="chips scroll" id="a-acc">${accChips(accs, a.account_id)}</div></div>
@@ -813,8 +830,9 @@ function renderAdd() {
     $("#a-cat-edit", el).onclick = () => openCategories(a.type);
   }
   if ($("#a-scan", el)) {
+    $("#a-cam", el).onclick = () => openCamera(() => $("#a-file-cam").click());
     $("#a-pick", el).onclick = () => $("#a-file", el).click();
-    $("#a-file", el).onchange = e => e.target.files[0] && scanFile(e.target.files[0]);
+    for (const id of ["#a-file", "#a-file-cam"]) $(id, el).onchange = e => e.target.files[0] && scanFile(e.target.files[0]);
   }
 }
 async function guessCategory() {
@@ -842,6 +860,42 @@ function shrink(file, max = 2400) {
     img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
     img.src = url;
   });
+}
+// ---------- in-app camera ----------
+var camStream = null;
+function closeCamera() {
+  if (camStream) camStream.getTracks().forEach(t => t.stop());
+  camStream = null;
+  $("#cam").classList.remove("open");
+  $("#cam-video").srcObject = null;
+  updateBack();
+}
+async function openCamera(fallback) {
+  if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) { fallback(); return; }
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({audio: false,
+      video: {facingMode: {ideal: "environment"}, width: {ideal: 1920}, height: {ideal: 1080}}});
+  } catch (e) {
+    camStream = null;
+    if (e && e.name === "NotAllowedError") toast("Camera access is off for Telegram. Opening the phone camera instead.");
+    fallback(); return;
+  }
+  const v = $("#cam-video");
+  v.srcObject = camStream;
+  $("#cam").classList.add("open");
+  updateBack();
+  try { await v.play(); } catch (e) {}
+  $("#cam-close").onclick = closeCamera;
+  $("#cam-gallery").onclick = () => { closeCamera(); $("#a-file").click(); };
+  $("#cam-shot").onclick = () => {
+    if (!v.videoWidth) return;
+    const cv = document.createElement("canvas");
+    cv.width = v.videoWidth; cv.height = v.videoHeight;
+    cv.getContext("2d").drawImage(v, 0, 0);
+    haptic("light");
+    closeCamera();
+    cv.toBlob(b => b && scanFile(b), "image/jpeg", 0.92);
+  };
 }
 async function scanFile(file) {
   $$("#a-scan .btn").forEach(b => { b.disabled = true; });
