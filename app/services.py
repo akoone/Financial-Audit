@@ -208,15 +208,34 @@ async def add_transfer(s: AsyncSession, user: User, src: Account, dst: Account, 
 
 
 # ---------- personal debts ----------
-# A debt is an account (receivable: they owe you; debt: you owe them) plus transfers, so lending
-# or borrowing is never counted as spending or income and net worth stays right.
+# Personal debts are kept apart: each person is an account of type receivable (they owe you)
+# or debt (you owe them) that is left out of net worth, totals and statements. Entries are
+# either a plain record (type "debt", touches no other account) or, when the money really
+# left/entered one of your accounts, a transfer with that account. Neither is spending or income.
 DEBT_TYPES = {"lent": "receivable", "borrowed": "debt"}
+DEBT_ACCOUNT_TYPES = set(DEBT_TYPES.values())
+
+
+async def _debt_record(s: AsyncSession, user: User, debt: Account, amount: Decimal, note: str,
+                       on: date) -> Transaction:
+    """Signed amount on the debt account only (positive = more owed to you / less owed by you)."""
+    rate = await fx.get_rate(s, debt.currency, user.base_currency, on)
+    t = Transaction(user_id=user.id, account_id=debt.id, type="debt", amount=amount, currency=debt.currency,
+                    account_amount=amount, base_amount=(amount * rate).quantize(Decimal("0.0001")),
+                    fx_rate_to_base=rate, note=note, occurred_on=on, created_via="app")
+    s.add(t)
+    await s.flush()
+    await s.refresh(t, ["category", "account"])
+    await audit(s, user, "create", t)
+    return t
 
 
 async def open_debt(s: AsyncSession, user: User, direction: str, person: str, amount: Decimal,
-                    money: Account, on: date | None = None, due: date | None = None,
-                    note: str = "") -> Account:
+                    money: Account | None = None, on: date | None = None, due: date | None = None,
+                    note: str = "", currency: str | None = None) -> Account:
+    """money=None: just a record. With an account: the money really moved (a transfer)."""
     type_ = DEBT_TYPES[direction]
+    on = on or local_today(user)
     person = person.strip()[:50]
     acc = None
     for a in await accounts(s, user):
@@ -230,42 +249,106 @@ async def open_debt(s: AsyncSession, user: User, direction: str, person: str, am
             if a.name.lower() == person.lower() and a.type == type_:
                 acc = a
     if acc is None:
-        acc = await add_account(s, user, person, type_, money.currency)
+        cur = (money.currency if money else (currency or user.base_currency)).upper()
+        acc = await add_account(s, user, person, type_, cur)
+        acc.include_in_net_worth = False
     if due:
         acc.due_on = due
     if note:
         acc.note = note[:200]
-    if direction == "lent":
-        await add_transfer(s, user, money, acc, amount, note=f"Lent to {acc.name}", on=on)
+    label = f"Lent to {acc.name}" if direction == "lent" else f"Borrowed from {acc.name}"
+    if money is None:
+        await _debt_record(s, user, acc, amount if direction == "lent" else -amount, label, on)
+    elif direction == "lent":
+        await add_transfer(s, user, money, acc, amount, note=label, on=on)
     else:
-        await add_transfer(s, user, acc, money, amount, note=f"Borrowed from {acc.name}", on=on)
+        await add_transfer(s, user, acc, money, amount, note=label, on=on)
     return acc
 
 
-async def repay_debt(s: AsyncSession, user: User, debt: Account, amount: Decimal, money: Account,
-                     on: date | None = None) -> Decimal:
+async def repay_debt(s: AsyncSession, user: User, debt: Account, amount: Decimal,
+                     money: Account | None = None, on: date | None = None) -> Decimal:
     """Record money paid back (in the debt's currency). Returns what is still owed; at 0 the
     debt is archived (closed) but its history stays."""
+    on = on or local_today(user)
     left = abs(await account_balance(s, debt))
     if amount > left:
         raise ValueError(f"Only {fmt(left, debt.currency)} is left to pay")
-    to_amount = amount if money.currency == debt.currency else None
-    if debt.type == "receivable":
-        await add_transfer(s, user, debt, money, amount, to_amount=to_amount,
-                           note=f"{debt.name} paid back", on=on)
+    owes_me = debt.type == "receivable"
+    label = f"{debt.name} paid back" if owes_me else f"Paid back {debt.name}"
+    if money is None:
+        await _debt_record(s, user, debt, -amount if owes_me else amount, label, on)
+    elif owes_me:
+        to_amount = amount if money.currency == debt.currency else None
+        await add_transfer(s, user, debt, money, amount, to_amount=to_amount, note=label, on=on)
     else:
-        if to_amount is None:  # paying from an account in another currency
-            amount_src = await fx.convert(s, amount, debt.currency, money.currency, on)
-            await add_transfer(s, user, money, debt, amount_src, to_amount=amount,
-                               note=f"Paid back {debt.name}", on=on)
-        else:
-            await add_transfer(s, user, money, debt, amount, to_amount=amount,
-                               note=f"Paid back {debt.name}", on=on)
+        src = amount if money.currency == debt.currency else \
+            await fx.convert(s, amount, debt.currency, money.currency, on)
+        await add_transfer(s, user, money, debt, src, to_amount=amount, note=label, on=on)
     left -= amount
-    if left == 0:
+    await sync_debt_state(s, user, debt)
+    return left
+
+
+async def sync_debt_state(s: AsyncSession, user: User, debt: Account):
+    """Paid off -> archived; owing again after an edit or a deleted return -> back in the list."""
+    await s.flush()
+    bal = await account_balance(s, debt)
+    if bal == 0 and not debt.archived:
         debt.archived = True
         await audit(s, user, "debt_closed", detail=debt.name)
-    return left
+    elif bal != 0 and debt.archived:
+        debt.archived = False
+
+
+async def debt_entries(s: AsyncSession, debt: Account) -> list[Transaction]:
+    return list((await s.execute(select(Transaction).where(Transaction.account_id == debt.id)
+                                 .order_by(Transaction.occurred_on, Transaction.id))).unique().scalars())
+
+
+async def edit_debt_entry(s: AsyncSession, user: User, debt: Account, t: Transaction,
+                          amount: Decimal | None = None, on: date | None = None) -> str:
+    """Change the amount (in the debt's currency, positive) or date of one debt entry."""
+    peer = None
+    if t.transfer_group:
+        peer = (await s.execute(select(Transaction).where(Transaction.transfer_group == t.transfer_group,
+                                                          Transaction.id != t.id))).unique().scalar_one_or_none()
+    old = f"{fmt(abs(t.account_amount), debt.currency)} on {t.occurred_on}"
+    await audit(s, user, "update", t, detail=f"was {old}")
+    if on is not None:
+        for x in filter(None, (t, peer)):
+            x.occurred_on = on
+    if amount is not None:
+        sign = 1 if t.account_amount >= 0 else -1
+        new = sign * amount
+        t.amount = t.account_amount = new
+        rate = await fx.get_rate(s, debt.currency, user.base_currency, t.occurred_on)
+        t.fx_rate_to_base = rate
+        t.base_amount = (new * rate).quantize(Decimal("0.0001"))
+        if peer is not None:
+            other = -new if peer.currency == debt.currency else \
+                await fx.convert(s, -new, debt.currency, peer.currency, t.occurred_on)
+            prate = await fx.get_rate(s, peer.currency, user.base_currency, t.occurred_on)
+            peer.amount = peer.account_amount = other
+            peer.fx_rate_to_base = prate
+            peer.base_amount = (other * prate).quantize(Decimal("0.0001"))
+    await sync_debt_state(s, user, debt)
+    return old
+
+
+async def delete_debt(s: AsyncSession, user: User, debt: Account) -> int:
+    """Remove a debt entered by mistake: all its entries (and the matching account moves) are
+    deleted, each one logged in the audit trail, then the debt itself."""
+    n = 0
+    for t in await debt_entries(s, debt):
+        if await s.get(Transaction, t.id) is not None and await delete_transaction(s, user, t.id):
+            n += 1
+    await audit(s, user, "debt_deleted", detail=f"{debt.name}: {n} entries")
+    if user.default_account_id == debt.id:
+        user.default_account_id = None
+    await s.delete(debt)
+    await s.flush()
+    return n
 
 
 async def delete_transaction(s: AsyncSession, user: User, tx_id: int) -> bool:
@@ -438,7 +521,7 @@ async def net_worth(s: AsyncSession, user: User) -> NetWorth:
         except fx.FxUnavailable:
             in_base = Decimal(0)
         lines.append((acc, bal, in_base))
-        if not acc.include_in_net_worth:
+        if not acc.include_in_net_worth or acc.type in DEBT_ACCOUNT_TYPES:
             continue
         if acc.type in LIABILITY_TYPES:
             liabilities += -in_base if in_base < 0 else in_base
@@ -578,6 +661,8 @@ async def take_snapshot(s: AsyncSession, user: User, day: date | None = None):
     s.add(snap)
     await s.flush()
     for acc, bal, in_base in nw.lines:
+        if acc.type in DEBT_ACCOUNT_TYPES:  # personal debts are kept apart from net worth
+            continue
         rate = (in_base / bal) if bal else Decimal(1)
         s.add(SnapshotLine(snapshot_id=snap.id, account_id=acc.id, account_name=acc.name,
                            account_type=acc.type, currency=acc.currency, balance=bal, value_base=in_base,

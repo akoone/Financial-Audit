@@ -177,13 +177,16 @@ async def _transaction(s: AsyncSession, user: User, tx_id: int) -> Transaction:
 # ---------- JSON shapes ----------
 
 def tx_json(t: Transaction, peer: Transaction | None = None) -> dict:
-    emoji = t.category.emoji if t.category else {"transfer": "🔁", "adjustment": "⚖️"}.get(t.type, "•")
+    emoji = t.category.emoji if t.category else {"transfer": "🔁", "adjustment": "⚖️", "debt": "🤝"}.get(t.type, "•")
     d = {"id": t.id, "date": str(t.occurred_on), "type": t.type, "amount": _f(t.amount), "currency": t.currency,
          "base_amount": _f(t.base_amount), "account_id": t.account_id, "account": t.account.name,
          "account_currency": t.account.currency, "category_id": t.category_id,
          "category": t.category.name if t.category else "", "emoji": emoji, "note": t.note,
          "merchant": t.merchant, "tags": t.tags or [], "source": t.created_via,
          "created_at": t.created_at.isoformat() if t.created_at else None}
+    for x in filter(None, (t, peer)):
+        if x.account.type in ("receivable", "debt"):
+            d["debt_id"] = x.account_id
     if peer is not None:
         d.update(to_account_id=peer.account_id, to_account=peer.account.name, to_amount=_f(peer.amount),
                  to_currency=peer.currency)
@@ -245,6 +248,8 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
                      "default_account_id": user.default_account_id, "today": str(sv.local_today(user))},
             "net_worth": _f(nw.net), "assets": _f(nw.assets), "liabilities": _f(nw.liabilities),
             "accounts": [acc_json(a, b, v, user) for a, b, v in nw.lines],
+            "debts": {"owed_to_me": _f(sum((v for a, b, v in nw.lines if a.type == "receivable"), Decimal(0))),
+                      "i_owe": _f(-sum((v for a, b, v in nw.lines if a.type == "debt"), Decimal(0)))},
             "archived": [{"id": a.id, "name": a.name, "type": a.type, "currency": a.currency,
                           "balance": _f(await sv.account_balance(s, a))}
                          for a in await sv.accounts(s, user, include_archived=True) if a.archived],
@@ -352,7 +357,7 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
             cond.append(Transaction.occurred_on >= parse_day(start, today))
         if end:
             cond.append(Transaction.occurred_on <= parse_day(end, today))
-        if type in ("income", "expense", "transfer", "adjustment"):
+        if type in ("income", "expense", "transfer", "adjustment", "debt"):
             cond.append(Transaction.type == type)
         if account_id:
             cond.append(Transaction.account_id == account_id)
@@ -596,7 +601,22 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
         await s.commit()
         return {"ok": True, "moved": moved, "to": target.name}
 
-    # ---------- personal debts ----------
+    # ---------- personal debts (kept apart from net worth) ----------
+    async def _debt(s, user, account_id) -> Account:
+        acc = await _account(s, user, account_id)
+        if acc.type not in sv.DEBT_ACCOUNT_TYPES:
+            raise HTTPException(422, "This account isn't a personal debt")
+        return acc
+
+    async def _money(s, user, body) -> Account | None:
+        """The account the money really moved from/into, or None for a plain record."""
+        if not body.get("account_id"):
+            return None
+        money = await _account(s, user, body["account_id"])
+        if money.type in sv.DEBT_ACCOUNT_TYPES or money.archived:
+            raise HTTPException(422, "Pick the account the money went from or into")
+        return money
+
     @app.post("/api/debts")
     async def add_debt(body: dict = Body(...), ctx: Ctx = Depends(get_ctx)):
         """Lent money to someone (direction=lent) or borrowed from someone (direction=borrowed)."""
@@ -608,26 +628,74 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
         if not person:
             raise HTTPException(422, "Who is it? Enter a name")
         amount = parse_number(body.get("amount"))
-        money = await _account(s, user, body.get("account_id") or user.default_account_id or 0)
-        if money.type in sv.DEBT_TYPES.values() or money.archived:
-            raise HTTPException(422, "Pick the account the money went from or into")
+        money = await _money(s, user, body)
         today = sv.local_today(user)
         on = parse_day(body["date"], today) if body.get("date") else today
         due = parse_day(body["due"], today) if body.get("due") else None
         acc = await sv.open_debt(s, user, direction, person, amount, money, on=on, due=due,
-                                 note=str(body.get("note") or "").strip())
+                                 note=str(body.get("note") or "").strip(),
+                                 currency=parse_currency(body.get("currency"), user.base_currency))
         await s.commit()
         return {"ok": True, "id": acc.id, "name": acc.name}
+
+    @app.get("/api/debts/{account_id}")
+    async def get_debt(account_id: int, ctx: Ctx = Depends(get_ctx)):
+        s, user = ctx.s, ctx.need()
+        debt = await _debt(s, user, account_id)
+        out = []
+        for t in await sv.debt_entries(s, debt):
+            peer = None
+            if t.transfer_group:
+                peer = (await s.execute(select(Transaction).where(
+                    Transaction.transfer_group == t.transfer_group, Transaction.id != t.id))).unique().scalar_one_or_none()
+            # positive = more owed to you (receivable) / more you owe (debt)
+            grows = t.account_amount > 0 if debt.type == "receivable" else t.account_amount < 0
+            out.append({"id": t.id, "date": str(t.occurred_on), "amount": _f(abs(t.account_amount)),
+                        "kind": "add" if grows else "return", "note": t.note,
+                        "account": peer.account.name if peer else None})
+        return {"id": debt.id, "name": debt.name, "type": debt.type, "currency": debt.currency,
+                "left": _f(abs(await sv.account_balance(s, debt))), "due": str(debt.due_on) if debt.due_on else None,
+                "note": debt.note or "", "archived": debt.archived, "entries": out[::-1]}
+
+    @app.patch("/api/debts/{account_id}")
+    async def edit_debt(account_id: int, body: dict = Body(...), ctx: Ctx = Depends(get_ctx)):
+        s, user = ctx.s, ctx.need()
+        debt = await _debt(s, user, account_id)
+        changes = []
+        if body.get("name") is not None:
+            name = re.sub(r"\s+", " ", str(body["name"])).strip()[:50]
+            if not name:
+                raise HTTPException(422, "Enter a name")
+            other = await sv.find_account(s, user, name)
+            if other and other.id != debt.id:
+                raise HTTPException(409, "You already have an account or debt with this name")
+            if name != debt.name:
+                changes.append(f"name {debt.name} -> {name}")
+                debt.name = name
+        if "due" in body:
+            debt.due_on = parse_day(body["due"], sv.local_today(user)) if body["due"] else None
+            changes.append(f"due {debt.due_on or 'none'}")
+        if "note" in body:
+            debt.note = str(body["note"] or "").strip()[:200]
+            changes.append("note")
+        if changes:
+            await sv.audit(s, user, "debt_edited", detail=f"{debt.name}: " + ", ".join(changes))
+        await s.commit()
+        return {"ok": True}
+
+    @app.delete("/api/debts/{account_id}")
+    async def delete_debt(account_id: int, ctx: Ctx = Depends(get_ctx)):
+        s, user = ctx.s, ctx.need()
+        debt = await _debt(s, user, account_id)
+        n = await sv.delete_debt(s, user, debt)
+        await s.commit()
+        return {"ok": True, "deleted_entries": n}
 
     @app.post("/api/debts/{account_id}/repay")
     async def repay_debt(account_id: int, body: dict = Body(...), ctx: Ctx = Depends(get_ctx)):
         s, user = ctx.s, ctx.need()
-        debt = await _account(s, user, account_id)
-        if debt.type not in sv.DEBT_TYPES.values():
-            raise HTTPException(422, "This account isn't a personal debt")
-        money = await _account(s, user, body.get("account_id") or user.default_account_id or 0)
-        if money.type in sv.DEBT_TYPES.values() or money.archived:
-            raise HTTPException(422, "Pick the account the money went from or into")
+        debt = await _debt(s, user, account_id)
+        money = await _money(s, user, body)
         amount = parse_number(body.get("amount"))
         today = sv.local_today(user)
         on = parse_day(body["date"], today) if body.get("date") else today
@@ -637,6 +705,32 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
             raise HTTPException(422, str(e))
         await s.commit()
         return {"ok": True, "left": _f(left), "closed": left == 0}
+
+    @app.patch("/api/debts/{account_id}/entries/{tx_id}")
+    async def edit_debt_entry(account_id: int, tx_id: int, body: dict = Body(...), ctx: Ctx = Depends(get_ctx)):
+        s, user = ctx.s, ctx.need()
+        debt = await _debt(s, user, account_id)
+        t = await _transaction(s, user, tx_id)
+        if t.account_id != debt.id:
+            raise HTTPException(404, "Entry not found")
+        today = sv.local_today(user)
+        amount = parse_number(body["amount"]) if body.get("amount") not in (None, "") else None
+        on = parse_day(body["date"], today) if body.get("date") else None
+        await sv.edit_debt_entry(s, user, debt, t, amount=amount, on=on)
+        await s.commit()
+        return {"ok": True, "left": _f(abs(await sv.account_balance(s, debt)))}
+
+    @app.delete("/api/debts/{account_id}/entries/{tx_id}")
+    async def delete_debt_entry(account_id: int, tx_id: int, ctx: Ctx = Depends(get_ctx)):
+        s, user = ctx.s, ctx.need()
+        debt = await _debt(s, user, account_id)
+        t = await _transaction(s, user, tx_id)
+        if t.account_id != debt.id:
+            raise HTTPException(404, "Entry not found")
+        await sv.delete_transaction(s, user, t.id)
+        await sv.sync_debt_state(s, user, debt)
+        await s.commit()
+        return {"ok": True, "left": _f(abs(await sv.account_balance(s, debt)))}
 
     @app.post("/api/accounts")
     async def add_account(body: dict = Body(...), ctx: Ctx = Depends(get_ctx)):

@@ -244,52 +244,68 @@ async def test_debts_and_archive(client, s):
     card = next(a for a in me["accounts"] if a["name"] == "Card")
     nw0 = me["net_worth"]
 
-    # lent 100 to Ali from Cash: not spending, net worth unchanged
+    # a plain record (no account): nothing else changes, kept out of net worth
     r = await client.post("/api/debts", json={"direction": "lent", "person": "Ali", "amount": "100",
-                                              "account_id": cash["id"], "date": "2026-11-01",
-                                              "due": "2026-12-01", "note": "for rent"})
+                                              "date": "2026-11-01", "due": "2026-12-01", "note": "for rent"})
     assert r.status_code == 200, r.text
     ali = r.json()["id"]
-    # borrowed 50 from Vali into Card
+    # borrowed 50 and it really came into the Card
     vali = (await client.post("/api/debts", json={"direction": "borrowed", "person": "Vali", "amount": "50",
                                                   "account_id": card["id"]})).json()["id"]
     me = (await client.get("/api/me")).json()
     acc = {a["id"]: a for a in me["accounts"]}
     assert acc[ali]["type"] == "receivable" and acc[ali]["balance"] == 100 and acc[ali]["due"] == "2026-12-01"
-    assert acc[ali]["note"] == "for rent" and not acc[ali]["liability"]
-    assert acc[vali]["type"] == "debt" and acc[vali]["balance"] == -50 and acc[vali]["liability"]
-    assert acc[cash["id"]]["balance"] == -100 and acc[card["id"]]["balance"] == 50
-    assert me["net_worth"] == nw0
+    assert acc[ali]["note"] == "for rent" and not acc[ali]["in_net_worth"]
+    assert acc[vali]["type"] == "debt" and acc[vali]["balance"] == -50
+    assert acc[cash["id"]]["balance"] == 0 and acc[card["id"]]["balance"] == 50
+    assert me["net_worth"] == nw0 + 50 and me["liabilities"] == 0  # debts don't count
+    assert me["debts"] == {"owed_to_me": 100.0, "i_owe": 50.0}
 
     # lending more to the same person adds to the same debt
-    assert (await client.post("/api/debts", json={"direction": "lent", "person": "ali", "amount": "20",
-                                                  "account_id": cash["id"]})).json()["id"] == ali
-    bad = await client.post("/api/debts", json={"direction": "lent", "person": "", "amount": "5"})
-    assert bad.status_code == 422
+    assert (await client.post("/api/debts", json={"direction": "lent", "person": "ali", "amount": "20"})).json()["id"] == ali
+    assert (await client.post("/api/debts", json={"direction": "lent", "person": "", "amount": "5"})).status_code == 422
     assert (await client.post("/api/debts", json={"direction": "lent", "person": "X", "amount": "5",
                                                   "account_id": vali})).status_code == 422
 
-    # partial and full returns
-    r = await client.post(f"/api/debts/{ali}/repay", json={"amount": "70", "account_id": cash["id"]})
+    # partial return, too much, edit, delete an entry
+    r = await client.post(f"/api/debts/{ali}/repay", json={"amount": "70"})
     assert r.json() == {"ok": True, "left": 50.0, "closed": False}
-    assert (await client.post(f"/api/debts/{ali}/repay", json={"amount": "60", "account_id": cash["id"]})).status_code == 422
-    r = await client.post(f"/api/debts/{ali}/repay", json={"amount": "50", "account_id": cash["id"]})
-    assert r.json()["closed"] is True
-    r = await client.post(f"/api/debts/{vali}/repay", json={"amount": "50", "account_id": card["id"]})
-    assert r.json()["closed"] is True
+    assert (await client.post(f"/api/debts/{ali}/repay", json={"amount": "60"})).status_code == 422
+    d = (await client.get(f"/api/debts/{ali}")).json()
+    assert d["left"] == 50 and [e["kind"] for e in d["entries"]] == ["return", "add", "add"]
+    first = d["entries"][-1]
+    r = await client.patch(f"/api/debts/{ali}/entries/{first['id']}", json={"amount": "150", "date": "2026-10-30"})
+    assert r.json()["left"] == 100
+    assert (await client.get(f"/api/debts/{ali}")).json()["entries"][-1]["date"] == "2026-10-30"
+    ret = d["entries"][0]
+    assert (await client.delete(f"/api/debts/{ali}/entries/{ret['id']}")).json()["left"] == 170
+    # edit the debt itself
+    assert (await client.patch(f"/api/debts/{ali}", json={"name": "Ali aka", "due": None, "note": ""})).status_code == 200
+    d = (await client.get(f"/api/debts/{ali}")).json()
+    assert d["name"] == "Ali aka" and d["due"] is None and d["note"] == ""
+    assert (await client.patch(f"/api/debts/{ali}", json={"name": "Cash"})).status_code == 409
+    # editing a transfer-based entry keeps the account side in step
+    v_entry = (await client.get(f"/api/debts/{vali}")).json()["entries"][0]
+    await client.patch(f"/api/debts/{vali}/entries/{v_entry['id']}", json={"amount": "80"})
     me = (await client.get("/api/me")).json()
-    assert ali not in {a["id"] for a in me["accounts"]}
-    assert {a["id"] for a in me["archived"]} >= {ali, vali}
-    assert next(a for a in me["accounts"] if a["id"] == cash["id"])["balance"] == 0
-    assert (await client.post(f"/api/debts/{cash['id']}/repay", json={"amount": "1"})).status_code == 422
+    assert next(a for a in me["accounts"] if a["id"] == card["id"])["balance"] == 80
 
-    # restore an archived account
-    assert (await client.patch(f"/api/accounts/{ali}", json={"archived": False})).status_code == 200
+    # paid off -> archived; restore works
+    r = await client.post(f"/api/debts/{vali}/repay", json={"amount": "80", "account_id": card["id"]})
+    assert r.json()["closed"] is True
     me = (await client.get("/api/me")).json()
-    assert ali in {a["id"] for a in me["accounts"]} and ali not in {a["id"] for a in me["archived"]}
-    # history keeps every movement
-    hist = (await client.get("/api/transactions", params={"account_id": ali})).json()["items"]
-    assert len(hist) == 4
+    assert vali in {a["id"] for a in me["archived"]}
+    assert next(a for a in me["accounts"] if a["id"] == card["id"])["balance"] == 0
+    assert (await client.post(f"/api/debts/{cash['id']}/repay", json={"amount": "1"})).status_code == 422
+    assert (await client.patch(f"/api/accounts/{vali}", json={"archived": False})).status_code == 200
+    assert vali in {a["id"] for a in (await client.get("/api/me")).json()["accounts"]}
+
+    # delete a debt entered by mistake: its entries and the card moves go too, all logged
+    assert (await client.delete(f"/api/debts/{vali}")).json() == {"ok": True, "deleted_entries": 2}
+    me = (await client.get("/api/me")).json()
+    assert vali not in {a["id"] for a in me["accounts"] + me["archived"]}
+    assert (await client.get("/api/transactions", params={"account_id": card["id"]})).json()["items"] == []
+    assert (await client.delete(f"/api/debts/{card['id']}")).status_code == 422
 
 
 async def test_scan_without_ocr(client, s, monkeypatch):
