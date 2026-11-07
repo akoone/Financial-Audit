@@ -237,6 +237,13 @@
            opacity: 0; transform: translateY(16px); pointer-events: none; transition: opacity .2s, transform .2s; }
   .toast.show { opacity: 1; transform: none; pointer-events: auto; }
   .toast button { margin-left: auto; border: 0; background: none; color: #8ec0ff; font-size: 15px; font-weight: 600; padding: 0; }
+  /* Tablets, Telegram Desktop and wide windows: keep a phone-like column in the middle */
+  @media (min-width: 700px) {
+    .view { max-width: 640px; margin-left: auto; margin-right: auto; }
+    .tabbar { left: 50%; right: auto; width: 100%; max-width: 672px; transform: translateX(-50%); border-radius: 16px 16px 0 0; }
+    .sheet { left: 0; right: 0; margin: 0 auto; max-width: 672px; }
+    .toast { left: 50%; right: auto; width: 100%; max-width: 640px; margin-left: -320px; }
+  }
   .hist-item { font-size: 13px; padding: 6px 0; border-top: 1px solid var(--sep); }
   .hist-item:first-child { border-top: 0; }
 </style>
@@ -1484,6 +1491,7 @@ function renderMore() {
       <div class="kv" style="margin-top:10px"><span class="k">Base currency</span><span>${esc(m.user.base_currency)}</span></div>
       <div class="muted small">To change it, send <b>/currency</b> in the chat. Past entries are converted at their own day's rate.</div></div>
     <button class="btn secondary" id="set-cats" style="margin-top:10px">🏷 Edit categories</button>
+    ${ver("8.0") && tg.addToHomeScreen ? `<button class="btn secondary" id="set-home" style="margin-top:10px">📲 Add the app to your home screen</button>` : ""}
     <div class="section-title">Where your data lives</div>
     <div class="card small">
       <div class="kv"><span class="k">Database</span><span>${esc(m.storage)}</span></div>
@@ -1504,6 +1512,8 @@ function renderMore() {
   };
   $$("#reports input", el).forEach(i => i.onchange = saveReports);
   $("#set-cats", el).onclick = () => openCategories("expense");
+  const home = $("#set-home", el);
+  if (home) home.onclick = () => { try { tg.addToHomeScreen(); } catch (e) { toast("Your Telegram version can't add it. Update Telegram and try again."); } };
   const setTz = async z => {
     try { await api("/api/settings", {method: "POST", body: {timezone: z}}); await refreshMe(); toast(`Timezone: ${z}`); renderMore(); }
     catch (e) { toast(e.message); }
