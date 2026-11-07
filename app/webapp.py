@@ -25,15 +25,16 @@ from aiogram.exceptions import TelegramForbiddenError
 from aiogram.types import BufferedInputFile
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import ai, db, fx, importers, ocr, services as sv
 from .config import get_settings
 from .models import (
-    ACCOUNT_TYPES, LIABILITY_TYPES, VALUED_TYPES, Account, AuditLog, Category, ReportSchedule,
-    Transaction, User,
+    ACCOUNT_TYPES, LIABILITY_TYPES, VALUED_TYPES, Account, AuditLog, Category, CategoryRule, ReceiptItem,
+    ReportSchedule, Transaction, User,
 )
+from .categories import FALLBACK
 from .parser import MULTIPLIERS, parse_amount
 
 log = logging.getLogger(__name__)
@@ -522,6 +523,72 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
                 "category_id": cat_id, "lines": len(r.items), "categories": len(sums), "ai": ai.enabled()}
 
     # ---------- accounts ----------
+
+    # ---------- categories ----------
+    def _cat_name(body: dict) -> str:
+        name = re.sub(r"\s+", " ", str(body.get("name") or "")).strip()[:60]
+        if not name:
+            raise HTTPException(422, "Give the category a name")
+        return name
+
+    def _emoji(body: dict, default: str = "") -> str:
+        return str(body.get("emoji") if body.get("emoji") is not None else default).strip()[:8]
+
+    @app.post("/api/categories")
+    async def add_category(body: dict = Body(...), ctx: Ctx = Depends(get_ctx)):
+        s, user = ctx.s, ctx.need()
+        kind = body.get("kind")
+        if kind not in ("expense", "income"):
+            raise HTTPException(422, "Kind must be expense or income")
+        name = _cat_name(body)
+        if await sv.category_by_name(s, user, name, kind):
+            raise HTTPException(409, "You already have a category with this name")
+        cat = Category(user_id=user.id, name=name, kind=kind, emoji=_emoji(body, "🏷"))
+        s.add(cat)
+        await s.flush()
+        await sv.audit(s, user, "category_added", detail=f"{kind}: {name}")
+        await s.commit()
+        return {"id": cat.id, "name": cat.name, "emoji": cat.emoji, "kind": cat.kind}
+
+    @app.patch("/api/categories/{category_id}")
+    async def edit_category(category_id: int, body: dict = Body(...), ctx: Ctx = Depends(get_ctx)):
+        s, user = ctx.s, ctx.need()
+        cat = await _category(s, user, category_id)
+        old = cat.name
+        if body.get("name") is not None:
+            name = _cat_name(body)
+            if name.lower() != old.lower():
+                if old == FALLBACK[cat.kind]:
+                    raise HTTPException(409, f"\"{old}\" is used when nothing else fits, so it keeps its name")
+                if await sv.category_by_name(s, user, name, cat.kind):
+                    raise HTTPException(409, "You already have a category with this name")
+            cat.name = name
+        if body.get("emoji") is not None:
+            cat.emoji = _emoji(body)
+        await sv.audit(s, user, "category_edited", detail=f"{old} -> {cat.emoji} {cat.name}")
+        await s.commit()
+        return {"id": cat.id, "name": cat.name, "emoji": cat.emoji, "kind": cat.kind}
+
+    @app.delete("/api/categories/{category_id}")
+    async def delete_category(category_id: int, move_to: int = 0, ctx: Ctx = Depends(get_ctx)):
+        """Delete a category; its entries move to another category (default: Other), never lost."""
+        s, user = ctx.s, ctx.need()
+        cat = await _category(s, user, category_id)
+        if cat.name == FALLBACK[cat.kind]:
+            raise HTTPException(409, f"\"{cat.name}\" is used when nothing else fits, so it can't be deleted")
+        target = await _category(s, user, move_to) if move_to else \
+            await sv.category_by_name(s, user, FALLBACK[cat.kind], cat.kind)
+        if target is None or target.id == cat.id or target.kind != cat.kind:
+            raise HTTPException(422, "Pick another category of the same type to move its entries to")
+        moved = (await s.execute(update(Transaction).where(
+            Transaction.user_id == user.id, Transaction.category_id == cat.id).values(category_id=target.id))).rowcount
+        await s.execute(update(ReceiptItem).where(ReceiptItem.category_id == cat.id).values(category_id=target.id))
+        await s.execute(update(Category).where(Category.parent_id == cat.id).values(parent_id=None))
+        await s.execute(delete(CategoryRule).where(CategoryRule.category_id == cat.id))
+        await sv.audit(s, user, "category_deleted", detail=f"{cat.name}: {moved} entries moved to {target.name}")
+        await s.delete(cat)
+        await s.commit()
+        return {"ok": True, "moved": moved, "to": target.name}
 
     @app.post("/api/accounts")
     async def add_account(body: dict = Body(...), ctx: Ctx = Depends(get_ctx)):

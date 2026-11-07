@@ -85,6 +85,9 @@
           white-space: nowrap; line-height: 1.2; }
   .card .chip, .sheet .card .chip { background: var(--soft); }
   .chip.on, .card .chip.on { background: var(--accent); color: var(--accent-text); }
+  .chip.add { background: transparent; box-shadow: inset 0 0 0 1px var(--sep); color: var(--link); }
+  .label-row { display: flex; justify-content: space-between; align-items: baseline; }
+  .label-row .link { margin: 0 4px 6px; padding: 0; }
   input.chip.date { font: inherit; font-size: 14px; color: inherit; min-height: 34px; }
 
   .row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 0; border: 0;
@@ -767,7 +770,8 @@ function renderAdd() {
         <button class="btn secondary" id="a-cam">📷 Take a photo</button><button class="btn secondary" id="a-pick">🖼 Choose image</button></div>
       <div class="muted small" id="a-scan-note" style="margin:6px 4px 0">Receipt or payment screenshot (Click, Payme, bank app): the form fills in for you.</div>
       <input type="file" id="a-file-cam" accept="image/*" capture="environment" hidden><input type="file" id="a-file" accept="image/*" hidden>` : ""}
-    ${cats.length ? `<div class="field"><span class="label">Category</span><div class="chips" id="a-cats">${cats.map(x => `<button type="button" class="chip ${x.id === a.category_id ? "on" : ""}" data-cat="${x.id}">${esc(x.emoji)} ${esc(x.name)}</button>`).join("")}</div></div>` : ""}
+    ${a.type !== "transfer" ? `<div class="field"><div class="label-row"><span class="label">Category</span><button type="button" class="link small" id="a-cat-edit">Edit categories</button></div>
+      <div class="chips" id="a-cats">${cats.map(x => `<button type="button" class="chip ${x.id === a.category_id ? "on" : ""}" data-cat="${x.id}">${esc(x.emoji)} ${esc(x.name)}</button>`).join("")}<button type="button" class="chip add" id="a-cat-new">＋ New</button></div></div>` : ""}
     <div class="field"><span class="label">${a.type === "transfer" ? "From" : a.type === "income" ? "Into account" : "Paid from"}</span><div class="chips scroll" id="a-acc">${accChips(accs, a.account_id)}</div></div>
     ${a.type === "transfer" ? `<div class="field"><span class="label">To</span><div class="chips scroll" id="a-to">${accChips(accs.filter(x => x.id !== a.account_id), a.to_account_id, "data-to")}</div></div>` : ""}
     ${needReceived ? `<div class="field"><label class="label" for="a-recv">Amount received in ${esc(dst.currency)} (optional)</label>
@@ -804,6 +808,10 @@ function renderAdd() {
   $$("#a-date [data-d]", el).forEach(b => b.onclick = () => { a.date = b.dataset.d === "0" ? todayIso() : yesterdayIso(); renderAdd(); });
   $("#a-day", el).onchange = e => { if (e.target.value) { a.date = e.target.value; renderAdd(); } };
   $("#a-save", el).onclick = saveAdd;
+  if ($("#a-cat-new", el)) {
+    $("#a-cat-new", el).onclick = () => editCategory(null, a.type, c => { a.category_id = c.id; a.catPicked = true; });
+    $("#a-cat-edit", el).onclick = () => openCategories(a.type);
+  }
   if ($("#a-scan", el)) {
     $("#a-cam", el).onclick = () => $("#a-file-cam", el).click();
     $("#a-pick", el).onclick = () => $("#a-file", el).click();
@@ -965,6 +973,78 @@ async function openAccount(id) {
     } catch (e) {}
   });
 }
+// ---------- categories ----------
+const KIND_NAME = {expense: "Expense", income: "Income"};
+const FALLBACK_CAT = {expense: "Other", income: "Other income"};
+const EMOJI_PICKS = ["🛒", "🍽", "☕", "🚕", "⛽", "🏠", "💡", "📱", "💊", "👕", "🎁", "🎓", "✈️", "🎮", "🐾", "👶", "💇", "🏋️", "🧾", "💼", "💰", "📈", "🏷"];
+function catsChanged() { S.dash = null; S.histData = null; if (S.view === "add") renderAdd(); }
+function openCategories(kind = "expense") {
+  const draw = () => {
+    const cats = S.me.categories[kind];
+    openSheet(`<h2>Categories</h2>
+      <div class="seg" id="cg-kind">${["expense", "income"].map(k => `<button data-k="${k}" class="${k === kind ? "on" : ""}">${KIND_NAME[k]}</button>`).join("")}</div>
+      <div class="card list" style="margin-top:12px">${cats.map(c => `<button type="button" class="row" data-c="${c.id}">
+        <span class="ico" aria-hidden="true">${esc(c.emoji || "•")}</span><span class="main"><div class="t">${esc(c.name)}</div></span>
+        <span class="muted" aria-hidden="true">›</span></button>`).join("")}</div>
+      <button class="btn secondary" id="cg-new" style="margin-top:14px">＋ New ${kind} category</button>
+      <div class="muted small" style="margin:10px 4px">Tap one to rename it, change its icon or delete it. Entries of a deleted category are moved, never lost.</div>`, root => {
+      $$("#cg-kind button", root).forEach(b => b.onclick = () => { kind = b.dataset.k; draw(); });
+      $$("[data-c]", root).forEach(b => b.onclick = () => editCategory(+b.dataset.c, kind, null, draw));
+      $("#cg-new", root).onclick = () => editCategory(null, kind, null, draw);
+    });
+  };
+  draw();
+}
+function editCategory(id, kind, onCreated, back) {
+  const cat = id ? S.me.categories[kind].find(c => c.id === id) : null;
+  const emoji0 = cat ? cat.emoji : "🏷";
+  const isFallback = cat && cat.name === FALLBACK_CAT[kind];
+  const others = S.me.categories[kind].filter(c => !cat || c.id !== cat.id);
+  const fb = others.find(c => c.name === FALLBACK_CAT[kind]);
+  openSheet(`<h2>${cat ? "Edit category" : `New ${kind} category`}</h2>
+    <div class="field" style="margin-top:0"><label class="label" for="cg-name">Name</label>
+      <div class="btn-row" style="margin-top:0"><input class="inp" id="cg-emoji" value="${esc(emoji0)}" maxlength="8" aria-label="Icon" style="flex:0 0 64px;text-align:center;font-size:20px">
+      <input class="inp" id="cg-name" maxlength="60" value="${esc(cat ? cat.name : "")}" placeholder="e.g. Kids, Gym, Rent" autocomplete="off" ${isFallback ? "readonly" : ""} style="flex:1"></div>
+      ${isFallback ? `<div class="muted small" style="margin:6px 4px 0">Used when nothing else fits, so only its icon can change.</div>` : ""}</div>
+    <div class="field"><span class="label">Icon</span><div class="chips" id="cg-picks">${EMOJI_PICKS.map(e => `<button type="button" class="chip ${e === emoji0 ? "on" : ""}" data-e="${e}">${e}</button>`).join("")}</div></div>
+    <button class="btn" id="cg-save" style="margin-top:16px">${cat ? "Save" : "Add category"}</button>
+    ${cat && !isFallback ? `<div class="field" style="margin-top:22px"><label class="label" for="cg-move">When deleted, move its entries to</label>
+      <select class="inp" id="cg-move">${others.map(c => `<option value="${c.id}" ${fb && c.id === fb.id ? "selected" : ""}>${esc(c.emoji)} ${esc(c.name)}</option>`).join("")}</select></div>
+      <button class="btn danger" id="cg-del" style="margin-top:8px">Delete category</button>` : ""}`, root => {
+    const emo = $("#cg-emoji", root);
+    $$("#cg-picks .chip", root).forEach(b => b.onclick = () => {
+      emo.value = b.dataset.e; $$("#cg-picks .chip", root).forEach(x => x.classList.toggle("on", x === b));
+    });
+    if (!cat) setTimeout(() => $("#cg-name", root).focus(), 250);
+    $("#cg-save", root).onclick = async e => {
+      const body = {name: $("#cg-name", root).value.trim(), emoji: emo.value.trim()};
+      if (!body.name) { toast("Give the category a name"); return; }
+      e.target.disabled = true;
+      try {
+        const c = cat ? await api(`/api/categories/${cat.id}`, {method: "PATCH", body})
+                      : await api("/api/categories", {method: "POST", body: {...body, kind}});
+        haptic("success"); await refreshMe();
+        if (onCreated) onCreated(c);
+        toast(cat ? "Category saved" : `${body.name} added`);
+        catsChanged();
+        if (back) back(); else closeSheet();
+      } catch (err) { toast(err.message); e.target.disabled = false; }
+    };
+    const del = $("#cg-del", root);
+    if (del) del.onclick = async () => {
+      const to = +$("#cg-move", root).value, target = others.find(c => c.id === to);
+      if (!await confirmAsk(`Delete ${cat.name}? Its entries move to ${target ? target.name : "Other"}.`)) return;
+      try {
+        const r = await api(`/api/categories/${cat.id}?move_to=${to}`, {method: "DELETE"});
+        haptic("success"); await refreshMe();
+        if (S.add && S.add.category_id === cat.id) S.add.category_id = null;
+        toast(r.moved ? `Deleted. ${r.moved} entries moved to ${r.to}` : "Category deleted");
+        catsChanged();
+        if (back) back(); else closeSheet();
+      } catch (err) { toast(err.message); }
+    };
+  });
+}
 function openNewAccount() {
   const st = {type: "bank", currency: baseCur()};
   const draw = () => {
@@ -1017,6 +1097,7 @@ function renderMore() {
       ${deviceTz && deviceTz !== m.user.timezone && m.timezones.includes(deviceTz) ? `<button class="link" id="tz-dev">Use this phone's timezone: ${esc(deviceTz)}</button>` : ""}
       <div class="kv" style="margin-top:10px"><span class="k">Base currency</span><span>${esc(m.user.base_currency)}</span></div>
       <div class="muted small">To change it, send <b>/currency</b> in the chat. Past entries are converted at their own day's rate.</div></div>
+    <button class="btn secondary" id="set-cats" style="margin-top:10px">🏷 Edit categories</button>
     <div class="section-title">Where your data lives</div>
     <div class="card small">
       <div class="kv"><span class="k">Database</span><span>${esc(m.storage)}</span></div>
@@ -1035,6 +1116,7 @@ function renderMore() {
     catch (e) { toast(e.message); }
   };
   $$("#reports input", el).forEach(i => i.onchange = saveReports);
+  $("#set-cats", el).onclick = () => openCategories("expense");
   const setTz = async z => {
     try { await api("/api/settings", {method: "POST", body: {timezone: z}}); await refreshMe(); toast(`Timezone: ${z}`); renderMore(); }
     catch (e) { toast(e.message); }

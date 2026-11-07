@@ -53,6 +53,7 @@ class OcrResult:
     merchant: str = ""
     is_income: bool = False
     items: list[OcrItem] = field(default_factory=list)
+    labeled: bool = False  # the total came from a "total" line, not a guess
 
 
 def _money(s: str) -> Decimal | None:
@@ -121,8 +122,11 @@ def parse_text(text: str) -> OcrResult:
                 nums = _all_money(_strip_dates(lines[i + 1]))
             if nums:
                 total = max(nums)
+                res.labeled = True
     if total is None:
-        nums = [n for l in lines for n in _all_money(_strip_dates(l))]
+        # No total line: take the largest amount, ignoring tax IDs, phones and receipt numbers
+        nums = [n for l in lines if not any(w in l.lower() for w in SKIP_LINE_WORDS)
+                for n in _all_money(_strip_dates(l)) if len(str(int(n))) < 9 or "." in str(n)]
         total = max(nums) if nums else None
     res.total = total if total and total > 0 else None
 
@@ -165,19 +169,52 @@ def parse_text(text: str) -> OcrResult:
     return res
 
 
-def _ocr_sync(data: bytes) -> str:
-    import pytesseract
+def _prepare(data: bytes):
     from PIL import Image, ImageOps
 
     img = Image.open(io.BytesIO(data))
     img = ImageOps.exif_transpose(img).convert("L")
-    if img.width < 1600:  # upscaling helps Tesseract with small screenshot text (e.g. "+" signs)
+    longest = max(img.size)
+    if longest > 2400:  # big camera photos: smaller is faster and reads just as well
+        k = 2400 / longest
+        img = img.resize((int(img.width * k), int(img.height * k)))
+    elif img.width < 1600:  # upscaling helps Tesseract with small screenshot text (e.g. "+" signs)
         scale = 1600 / img.width
         img = img.resize((int(img.width * scale), int(img.height * scale)))
-    img = ImageOps.autocontrast(img)
-    return pytesseract.image_to_string(img, lang=get_settings().ocr_langs, config="--psm 4")
+    return ImageOps.autocontrast(img, cutoff=1)
+
+
+def _passes() -> list[str]:
+    """Latin and Cyrillic text are read in separate passes: mixing all languages at once makes
+    Tesseract confuse letters (JAMI becomes ЗАМТ)."""
+    langs = [l for l in get_settings().ocr_langs.split("+") if l]
+    latin = [l for l in langs if l in ("eng", "uzb", "tur", "kor")]
+    cyr = [l for l in langs if l not in latin] + (["eng"] if "eng" in langs else [])
+    out = ["+".join(x) for x in (latin, cyr) if x]
+    return list(dict.fromkeys(out)) or ["eng"]
+
+
+def _ocr_sync(data: bytes, lang: str, psm: int = 6) -> str:
+    import pytesseract
+
+    # psm 6 keeps each receipt row ("Sut 1L ... 14 500") on one line
+    return pytesseract.image_to_string(_prepare(data), lang=lang, config=f"--psm {psm}")
+
+
+def _score(r: OcrResult) -> tuple:
+    return (r.labeled, r.total is not None, len(r.items), len(r.text))
 
 
 async def read_image(data: bytes) -> OcrResult:
-    text = await asyncio.to_thread(_ocr_sync, data)
-    return parse_text(text)
+    best = None
+    for lang in _passes():
+        r = parse_text(await asyncio.to_thread(_ocr_sync, data, lang))
+        if best is None or _score(r) > _score(best):
+            best = r
+        if best.labeled:
+            break
+    if best.total is None:  # sparse layouts such as payment screenshots
+        r = parse_text(await asyncio.to_thread(_ocr_sync, data, "+".join(_passes()), 4))
+        if _score(r) > _score(best):
+            best = r
+    return best

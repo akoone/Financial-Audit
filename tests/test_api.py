@@ -198,6 +198,45 @@ async def test_settings_and_files(client, s):
     assert (await client.get("/app")).headers["cache-control"] == "no-cache"
 
 
+async def test_categories_create_edit_delete(client, s):
+    await client.post("/api/setup", json={"currency": "USD", "timezone": "UTC"})
+    r = await client.post("/api/categories", json={"name": " Gym ", "kind": "expense", "emoji": "🏋️"})
+    assert r.status_code == 200, r.text
+    gym = r.json()
+    assert gym["name"] == "Gym" and gym["kind"] == "expense"
+    assert (await client.post("/api/categories", json={"name": "gym", "kind": "expense"})).status_code == 409
+    assert (await client.post("/api/categories", json={"name": "", "kind": "expense"})).status_code == 422
+    assert (await client.post("/api/categories", json={"name": "X", "kind": "transfer"})).status_code == 422
+    me = (await client.get("/api/me")).json()
+    assert any(c["id"] == gym["id"] for c in me["categories"]["expense"])
+
+    t = (await client.post("/api/transactions", json={"type": "expense", "amount": "30", "note": "monthly pass",
+                                                        "category_id": gym["id"]})).json()["transaction"]
+    assert t["category"] == "Gym"
+
+    r = await client.patch(f"/api/categories/{gym['id']}", json={"name": "Sport", "emoji": "⚽"})
+    assert r.status_code == 200 and r.json()["name"] == "Sport"
+    assert (await client.get(f"/api/transactions/{t['id']}")).json()["category"] == "Sport"
+    other = next(c for c in me["categories"]["expense"] if c["name"] == "Other")
+    food = next(c for c in me["categories"]["expense"] if c["name"] == "Eating out")
+    assert (await client.patch(f"/api/categories/{other['id']}", json={"name": "Misc"})).status_code == 409
+    assert (await client.patch(f"/api/categories/{other['id']}", json={"emoji": "🧺"})).status_code == 200
+    assert (await client.patch(f"/api/categories/{gym['id']}", json={"name": "Eating out"})).status_code == 409
+    assert (await client.delete(f"/api/categories/{other['id']}")).status_code == 409
+    income = me["categories"]["income"][0]
+    assert (await client.delete(f"/api/categories/{gym['id']}", params={"move_to": income["id"]})).status_code == 422
+
+    r = await client.delete(f"/api/categories/{gym['id']}", params={"move_to": food["id"]})
+    assert r.json() == {"ok": True, "moved": 1, "to": "Eating out"}
+    assert (await client.get(f"/api/transactions/{t['id']}")).json()["category"] == "Eating out"
+    me = (await client.get("/api/me")).json()
+    assert not any(c["id"] == gym["id"] for c in me["categories"]["expense"])
+    # default target is "Other"
+    tmp = (await client.post("/api/categories", json={"name": "Tmp", "kind": "expense"})).json()
+    await client.post("/api/transactions", json={"type": "expense", "amount": "1", "category_id": tmp["id"]})
+    assert (await client.delete(f"/api/categories/{tmp['id']}")).json()["to"] == "Other"
+
+
 async def test_scan_without_ocr(client, s, monkeypatch):
     from app import ocr
     monkeypatch.setattr(ocr, "available", lambda: False)
