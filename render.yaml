@@ -1,0 +1,26 @@
+# One-click setup on Render (free plan): Dashboard → New → Blueprint → pick this repository.
+# You'll be asked for BOT_TOKEN and DATABASE_URL (your Neon connection string). See DEPLOY.md.
+services:
+  - type: web
+    name: money-tracker-bot
+    runtime: docker
+    plan: free
+    region: ohio            # close to Neon's us-east-2; pick the region nearest your database
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: AI_MODEL
+        value: claude-haiku-5-5
+      - key: DEFAULT_TIMEZONE
+        value: Asia/Tashkent
+      - key: DEFAULT_CURRENCY
+        value: UZS
+      - key: ALLOWED_USER_IDS
+        value: ""

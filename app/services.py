@@ -7,8 +7,9 @@ import secrets
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +28,14 @@ def fmt(amount: Decimal | float, currency: str = "") -> str:
     a = Decimal(str(amount)).quantize(Q2)
     s = f"{a:,.2f}"
     return f"{s} {currency}".strip()
+
+
+def local_today(user: User | None) -> date:
+    """Today's date in the user's own timezone (the server usually runs on UTC)."""
+    try:
+        return datetime.now(ZoneInfo(user.timezone or "UTC")).date() if user else date.today()
+    except Exception:
+        return date.today()
 
 
 # ---------- users ----------
@@ -149,7 +158,7 @@ async def add_transaction(s: AsyncSession, user: User, account: Account, kind: s
                           on: date | None = None, created_via="text", external_ref: str | None = None,
                           receipt_id: int | None = None) -> Transaction:
     """kind: income | expense | adjustment. `amount` positive (adjustment may be signed)."""
-    on = on or date.today()
+    on = on or local_today(user)
     currency = (currency or account.currency).upper()
     signed = -abs(amount) if kind == "expense" else (abs(amount) if kind == "income" else amount)
     acc_amount = await fx.convert(s, signed, currency, account.currency, on)
@@ -174,7 +183,7 @@ async def add_transfer(s: AsyncSession, user: User, src: Account, dst: Account, 
 
     `amount` is in src currency; `to_amount` (optional) is what arrived in dst currency,
     which records the real exchange rate you got."""
-    on = on or date.today()
+    on = on or local_today(user)
     group = str(uuid.uuid4())
     if to_amount is None:
         to_amount = await fx.convert(s, amount, src.currency, dst.currency, on)
@@ -234,6 +243,98 @@ async def find_duplicate(s: AsyncSession, user: User, amount: Decimal, currency:
         Transaction.currency == currency.upper(), Transaction.amount == -abs(amount),
         Transaction.occurred_on.between(on - timedelta(days=days), on + timedelta(days=days)))
     return (await s.execute(q.limit(1))).unique().scalar_one_or_none()
+
+
+async def update_transaction(s: AsyncSession, user: User, t: Transaction, *, kind: str | None = None,
+                             amount: Decimal | None = None, currency: str | None = None,
+                             account: Account | None = None, category: Category | None = None,
+                             on: date | None = None, note: str | None = None) -> str:
+    """Edit an entry. The full old version goes to the audit log first. Returns what changed.
+
+    Income/expense: anything can change (amounts are re-converted at that day's rate).
+    Transfers: only the date and note (on both sides); delete and re-add to change amounts."""
+    changes = []
+    if t.type == "transfer":
+        legs = (await s.execute(select(Transaction).where(
+            Transaction.transfer_group == t.transfer_group))).unique().scalars().all()
+        if on and on != t.occurred_on:
+            changes.append(f"date {t.occurred_on} -> {on}")
+        if note is not None and note != t.note:
+            changes.append("note")
+        if changes:
+            for leg in legs:
+                await audit(s, user, "update", leg, "; ".join(changes))
+                leg.occurred_on = on or leg.occurred_on
+                if note is not None:
+                    leg.note = note[:255]
+        await s.flush()
+        return "; ".join(changes)
+
+    new_kind = kind if kind in ("income", "expense") and t.type in ("income", "expense") else t.type
+    if t.type == "adjustment":  # corrections keep their sign
+        old_abs = t.amount
+        new_amount = amount if amount is not None else t.amount
+    else:
+        old_abs = abs(t.amount)
+        new_amount = abs(amount) if amount is not None else old_abs
+    new_currency = (currency or t.currency).upper()
+    new_account = account or t.account
+    new_on = on or t.occurred_on
+    if new_kind != t.type:
+        changes.append(f"type {t.type} -> {new_kind}")
+    if new_amount != old_abs or new_currency != t.currency:
+        changes.append(f"amount {fmt(old_abs, t.currency)} -> {fmt(new_amount, new_currency)}")
+    if new_account.id != t.account_id:
+        changes.append(f"account {t.account.name} -> {new_account.name}")
+    if new_on != t.occurred_on:
+        changes.append(f"date {t.occurred_on} -> {new_on}")
+    if new_kind != t.type and (category is None or category.kind != new_kind):
+        category = await category_by_name(s, user, FALLBACK[new_kind], new_kind)
+    if category is not None and category.id != t.category_id:
+        changes.append(f"category {t.category.name if t.category else '-'} -> {category.name}")
+    if note is not None and note.strip() != t.note:
+        changes.append("note")
+    if not changes:
+        return ""
+    await audit(s, user, "update", t, "; ".join(changes))
+
+    if (new_kind, new_amount, new_currency, new_account.id, new_on) != (
+            t.type, old_abs, t.currency, t.account_id, t.occurred_on):
+        signed = -new_amount if new_kind == "expense" else new_amount
+        t.account_amount = await fx.convert(s, signed, new_currency, new_account.currency, new_on)
+        rate = await fx.get_rate(s, new_currency, user.base_currency, new_on)
+        t.fx_rate_to_base = rate
+        t.base_amount = (signed * rate).quantize(Decimal("0.0001"))
+        t.type, t.amount, t.currency, t.account_id, t.occurred_on = (
+            new_kind, signed, new_currency, new_account.id, new_on)
+    if note is not None:
+        t.note = note.strip()[:255]
+    if category is not None and category.id != t.category_id:
+        t.category_id = category.id
+        if t.merchant or t.note:
+            await learn_rule(s, user, t.merchant or t.note, category, source="user")
+    await s.flush()
+    await s.refresh(t, ["category", "account"])
+    return "; ".join(changes)
+
+
+async def reconcile(s: AsyncSession, user: User, acc: Account, actual: Decimal,
+                    on: date | None = None) -> Transaction | None:
+    """Make the recorded balance match reality (cash counted, bank app balance, amount owed).
+
+    Valued accounts (investments, property...) get a new valuation; others get a 'Balance
+    correction' adjustment for the difference. Adjustments are not income or spending, so
+    reports stay honest, and the statement shows them under corrections."""
+    if acc.type in VALUED_TYPES:
+        await set_valuation(s, acc, actual, on or local_today(user))
+        return None
+    if acc.type in LIABILITY_TYPES:
+        actual = -abs(actual)  # debts are negative balances
+    diff = actual - await account_balance(s, acc)
+    if diff == 0:
+        return None
+    return await add_transaction(s, user, acc, "adjustment", diff, acc.currency, None,
+                                 note="Balance correction", on=on, created_via="app")
 
 
 # ---------- balances & net worth ----------
@@ -403,7 +504,7 @@ async def audit(s: AsyncSession, user: User, action: str, t: Transaction | None 
 async def take_snapshot(s: AsyncSession, user: User, day: date | None = None):
     """Freeze today's balances and net worth (re-taking the same day replaces it)."""
     from .models import Snapshot, SnapshotLine
-    day = day or date.today()
+    day = day or local_today(user)
     old = (await s.execute(select(Snapshot).where(Snapshot.user_id == user.id, Snapshot.day == day))
            ).scalar_one_or_none()
     if old:
@@ -473,7 +574,8 @@ async def statement(s: AsyncSession, user: User, start: date, end: date) -> Stat
     """Balance statement for a period: opening vs closing net worth and what moved it."""
     opening = await snapshot_on_or_before(s, user, start - timedelta(days=1))
     closing = await snapshot_on_or_before(s, user, end)
-    if closing is None or (end >= date.today() and closing.day < date.today()):
+    today = local_today(user)
+    if closing is None or (end >= today and closing.day < today):
         closing = await take_snapshot(s, user)
     st = await stats(s, user, start, end)
     open_lines = {l.account_id: l for l in await snapshot_lines(s, opening)} if opening else {}
@@ -541,7 +643,7 @@ async def backup_zip(s: AsyncSession, user: User) -> bytes:
                                               [[a.at, a.action, a.transaction_id, a.detail, json.dumps(a.data, ensure_ascii=False)]
                                                for a in audit_rows]))
         z.writestr("backup.json", json.dumps({
-            "exported_at": str(date.today()), "base_currency": user.base_currency, "timezone": user.timezone,
+            "exported_at": str(local_today(user)), "base_currency": user.base_currency, "timezone": user.timezone,
             "accounts": [{"id": a.id, "name": a.name, "type": a.type, "currency": a.currency,
                           "opening_balance": str(a.opening_balance), "archived": a.archived} for a in accs],
             "categories": [{"id": c.id, "name": c.name, "kind": c.kind} for c in cats],

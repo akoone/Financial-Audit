@@ -1,6 +1,7 @@
 """Sends the daily / weekly / monthly reports at each user's chosen local time."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from aiogram import Bot
@@ -19,7 +20,7 @@ CRON = {"daily": {}, "weekly": {"day_of_week": "sun"}, "monthly": {"day": 1}}
 
 
 async def _run(user_id: int, kind: str):
-    from datetime import date, timedelta
+    from datetime import timedelta
 
     from . import services as sv
     from .bot import send_backup, send_report, statement_text
@@ -34,7 +35,7 @@ async def _run(user_id: int, kind: str):
                 await send_report(_bot, s, user, kind)
                 if kind == "monthly":
                     # Month closing: statement for the month that just ended + a full backup file
-                    end = date.today().replace(day=1) - timedelta(days=1)
+                    end = sv.local_today(user).replace(day=1) - timedelta(days=1)
                     st = await sv.statement(s, user, end.replace(day=1), end)
                     await _bot.send_message(user.telegram_id, statement_text(st))
                     await send_backup(_bot, s, user, caption="🗄 Monthly backup. Telegram keeps this file in "
@@ -83,3 +84,23 @@ async def start(bot: Bot):
             rows = list((await s.execute(select(ReportSchedule).where(ReportSchedule.user_id == u.id))).scalars())
             schedule_user(u, rows)
     log.info("Scheduled reports for %d users", len(users))
+    asyncio.get_running_loop().create_task(_ensure_today_snapshots())
+
+
+async def _ensure_today_snapshots():
+    """Make sure today's balance record exists even if the server was asleep or restarting at 23:55.
+    (The nightly job replaces it with the end-of-day version.)"""
+    from . import services as sv
+    from .models import Snapshot
+    async with db.session() as s:
+        for u in list((await s.execute(select(User))).scalars()):
+            have = (await s.execute(select(Snapshot.id).where(
+                Snapshot.user_id == u.id, Snapshot.day == sv.local_today(u)))).first()
+            if have:
+                continue
+            try:
+                await sv.take_snapshot(s, u)
+                await s.commit()
+            except Exception:
+                await s.rollback()
+                log.exception("startup snapshot for user %s failed", u.id)

@@ -41,6 +41,7 @@ HELP = """<b>How to log money</b>
 ❓ Start a message with <code>?</code> to ask about your money
 
 <b>Commands</b>
+/app – open the app: dashboard, add, history, accounts, statements
 /balance – all accounts
 /networth – assets, debts, net worth
 /report day|week|month|year – report with chart and AI advice
@@ -83,10 +84,19 @@ def kb(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
 
 
 def dashboard_button(period: str = "month") -> InlineKeyboardButton | None:
-    url = get_settings().webapp_url.rstrip("/")
-    if url.startswith("https://"):
+    url = get_settings().https_url
+    if url:
         return InlineKeyboardButton(text="📊 Open dashboard", web_app=WebAppInfo(url=f"{url}/app?period={period}"))
     return None
+
+
+def app_markup(text: str = "📱 Open app", tab: str = "") -> InlineKeyboardMarkup | None:
+    """Inline button that opens the Mini App (needs a public HTTPS address)."""
+    url = get_settings().https_url
+    if not url:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text=text, web_app=WebAppInfo(url=f"{url}/app" + (f"?tab={tab}" if tab else "")))]])
 
 
 def tx_line(t: Transaction) -> str:
@@ -117,7 +127,8 @@ async def require_user(msg: Message, user: User | None) -> bool:
 @router.message(CommandStart())
 async def start(msg: Message, command: CommandObject, s, user: User | None):
     if user:
-        await msg.answer(f"Welcome back! Base currency: <b>{user.base_currency}</b>.\n\n{HELP}")
+        await msg.answer(f"Welcome back! Base currency: <b>{user.base_currency}</b>.\n\n{HELP}",
+                         reply_markup=app_markup())
         return
     arg = (command.args or "").strip().upper()
     if len(arg) == 3 and arg.isalpha():
@@ -126,7 +137,7 @@ async def start(msg: Message, command: CommandObject, s, user: User | None):
         await s.commit()
         from .scheduler import schedule_user
         schedule_user(user)
-        await msg.answer(_welcome(arg))
+        await msg.answer(_welcome(arg), reply_markup=app_markup())
         return
     rows = [[(c, f"setup:{c}") for c in SETUP_CURRENCIES[i:i + 4]] for i in range(0, len(SETUP_CURRENCIES), 4)]
     await msg.answer("👋 Let's set up your money tracker.\n\nWhich currency should totals be shown in? "
@@ -150,7 +161,7 @@ async def setup_currency(cb: CallbackQuery, s, user):
     from .scheduler import schedule_user  # avoid import cycle
     await s.commit()
     schedule_user(user)
-    await cb.message.edit_text(_welcome(cur))
+    await cb.message.edit_text(_welcome(cur), reply_markup=app_markup())
 
 
 @router.message(Command("help"))
@@ -318,7 +329,7 @@ async def networth(msg: Message, s, user):
     lines += ["", f"<b>Liabilities {sv.fmt(nw.liabilities, c)}</b>"]
     lines += [f"• {html.escape(a.name)}: {sv.fmt(abs(v), c)}" for a, v in debts] or ["• none"]
     await sv.take_snapshot(s, user)
-    today = date.today()
+    today = sv.local_today(user)
     hist = []
     for label, d in (("30 days ago", today - timedelta(days=30)), ("start of year", today.replace(month=1, day=1)),
                      ("1 year ago", today - timedelta(days=365))):
@@ -361,14 +372,15 @@ async def report(msg: Message, command: CommandObject, bot: Bot, s, user):
     await send_report(bot, s, user, kind, msg.chat.id)
 
 
-@router.message(Command("dashboard"))
-async def dashboard(msg: Message, user):
-    btn = dashboard_button()
-    if not btn:
-        await msg.answer("The dashboard needs a public HTTPS address. Set WEBAPP_URL in the server's .env "
-                         "(see README → Dashboard).")
+@router.message(Command("app", "dashboard"))
+async def open_app(msg: Message, user):
+    markup = app_markup()
+    if not markup:
+        await msg.answer("The app needs a public HTTPS address. On Render this is automatic; on your own "
+                         "server set WEBAPP_URL in .env (see DEPLOY.md).")
         return
-    await msg.answer("Your interactive dashboard:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[btn]]))
+    await msg.answer("📱 Your money app: dashboard, quick add, history, accounts and statements.\n"
+                     "It's also under the <b>Open app</b> button next to the message box.", reply_markup=markup)
 
 
 @router.message(Command("reports"))
@@ -524,9 +536,9 @@ async def cb_setacc(cb: CallbackQuery, s, user):
 
 
 @router.callback_query(F.data.startswith("date:"))
-async def cb_date(cb: CallbackQuery):
+async def cb_date(cb: CallbackQuery, user):
     tid = cb.data.split(":")[1]
-    today = date.today()
+    today = sv.local_today(user)
     opts = [(("Today" if i == 0 else "Yesterday" if i == 1 else (today - timedelta(days=i)).strftime("%a %d")),
              f"setdate:{tid}:{i}") for i in range(0, 7)]
     await cb.message.edit_reply_markup(reply_markup=kb([opts[:4], opts[4:]]))
@@ -540,7 +552,7 @@ async def cb_setdate(cb: CallbackQuery, s, user):
     if not t or t.user_id != user.id:
         await cb.answer("Not found")
         return
-    new_day = date.today() - timedelta(days=int(back))
+    new_day = sv.local_today(user) - timedelta(days=int(back))
     await sv.audit(s, user, "update", t, f"date -> {new_day}")
     t.occurred_on = new_day
     await s.flush()
@@ -554,7 +566,7 @@ async def cb_setdate(cb: CallbackQuery, s, user):
 async def connect(msg: Message, s, user):
     if not await require_user(msg, user):
         return
-    url = get_settings().webapp_url.rstrip("/")
+    url = get_settings().public_url
     if not url:
         await msg.answer("Automatic alerts need the bot's web address (WEBAPP_URL in .env). Until then, just "
                          "<b>forward or paste</b> your bank's SMS/notification text here and I'll log it.")
@@ -699,7 +711,7 @@ async def cb_receipt_save(cb: CallbackQuery, s, user):
         await cb.answer("Already handled")
         return
     items = (await s.execute(select(ReceiptItem).where(ReceiptItem.receipt_id == rec.id))).scalars().all()
-    on = rec.purchased_on or date.today()
+    on = rec.purchased_on or sv.local_today(user)
     groups: dict[int, Decimal] = defaultdict(Decimal)
     for it in items:
         groups[it.category_id] += it.amount
@@ -783,7 +795,7 @@ async def _ask(msg: Message, s, user: User, question: str):
     if not ai.enabled():
         await msg.answer("Questions aren't switched on for this bot yet. Try /report month.")
         return
-    today = date.today()
+    today = sv.local_today(user)
     ctx = {"today": str(today), "base_currency": user.base_currency, "months": []}
     m_end = today
     for _ in range(6):
@@ -812,7 +824,7 @@ async def text_entry(msg: Message, s, user):
         await _ask(msg, s, user, text[1:])
         return
     accs = await sv.accounts(s, user)
-    entry = parse_entry(text, {a.name for a in accs})
+    entry = parse_entry(text, {a.name for a in accs}, sv.local_today(user))
     # Sentences that don't start with the amount (bank alerts, "spent 50k on lunch") are read by
     # AI when available; otherwise the simple sentence parser result is used.
     if entry is not None and entry.free_form and ai.enabled() and len(text.split()) > 3:
@@ -931,7 +943,7 @@ async def statement_cmd(msg: Message, command: CommandObject, s, user):
     if not await require_user(msg, user):
         return
     arg = (command.args or "").strip().lower()
-    today = date.today()
+    today = sv.local_today(user)
     try:
         if arg in ("", "month"):
             start, end = today.replace(day=1), today

@@ -17,7 +17,7 @@ It works for anyone who opens it. Every Telegram user gets their own separate da
 | Bank statements | Send a CSV or PDF statement, with the account name as the caption. Duplicates are skipped |
 | No double counting | A receipt and a bank alert for the same purchase are matched and counted once |
 | Reports | Sent automatically every day, every Sunday and on the 1st of the month, or on demand with `/report week`. Each report has a chart, an AI summary and suggestions |
-| Dashboard | `/dashboard` opens interactive charts in Telegram: categories (tap to drill down), daily spending, 12-month income vs expenses, accounts |
+| Mini App | The **Open app** button next to the message box (or `/app`) opens a full app inside Telegram: overview with charts, quick add (with receipt scan), searchable history with edit and delete, accounts with real-balance corrections, month statements, backups and settings |
 | Ask anything | `? how much did I spend on eating out this month` |
 | Net worth | `/networth`. Investments and property use `/value Stocks 15400` |
 | Daily records | Every night the bot freezes each account's balance and your net worth. `/networth` shows the change vs 30 days, the start of the year and 1 year ago |
@@ -28,7 +28,7 @@ It works for anyone who opens it. Every Telegram user gets their own separate da
 
 ## Setup (about 15 minutes)
 
-For a free server, follow **[DEPLOY.md](DEPLOY.md)** (Oracle Cloud Always Free, step by step).
+To put it online for free, follow **[DEPLOY.md](DEPLOY.md)**: Render + Neon (easiest, HTTPS and the Mini App work automatically) or Oracle Cloud Always Free.
 
 1. **Create the bot.** In Telegram, open @BotFather, send `/newbot`, and copy the token.
 2. **Optional: an AI key** at https://console.anthropic.com (prepaid credit; separate from a Claude Pro subscription). Without it the bot still works, and receipts are read with free OCR; AI alerts, AI advice and questions are off.
@@ -43,23 +43,23 @@ For a free server, follow **[DEPLOY.md](DEPLOY.md)** (Oracle Cloud Always Free, 
      ```
 5. **Start using it.** Open your bot in Telegram and send `/start`. Pick a base currency, then set your timezone with `/tz Asia/Seoul` (or your own).
 
-### Dashboard and automatic bank alerts (optional)
+### Mini App and automatic bank alerts
 
-Both need the bot's web server (port 8080) to be reachable over **HTTPS**:
+On Render both work automatically. On your own server they need the bot's web server (port 8080) to be reachable over **HTTPS**:
 
 - On a VPS, put a domain in front of it with Caddy, e.g. `bot.example.com { reverse_proxy localhost:8080 }`. Caddy adds HTTPS automatically.
 - For quick testing, use `cloudflared tunnel --url http://localhost:8080`.
 
 Set `WEBAPP_URL=https://bot.example.com` in `.env` and restart. Then:
 
-- `/dashboard` and the button under each report open the interactive charts.
+- The **Open app** menu button, `/app` and the button under each report open the Mini App.
 - `/connect` gives each user a private link. Their phone posts bank alerts to it:
   - **iPhone:** Shortcuts → Automation → Message from your bank → Get Contents of URL (POST, body = message).
   - **Android:** an SMS forwarder app or Tasker, sending to a webhook.
 
 ## Keeping your records for years
 
-- **Database.** Use PostgreSQL, either the bundled one with Docker or Neon. All money is stored as exact decimals, never rounded floats.
+- **Database.** Use PostgreSQL, either Neon or the bundled one with Docker. All money is stored as exact decimals, never rounded floats. New versions add their new columns automatically on start, without touching existing data.
 - **Three independent copies.** The database itself, the monthly backup zip in your Telegram chat, and (with Docker) the daily `pg_dump` from DEPLOY.md. If one is lost, the others remain.
 - **Frozen history.** Nightly snapshots record what every account held each day, in its own currency and in your base currency at that day's exchange rate. Old statements therefore never change, even when rates or later edits change today's numbers.
 - **Readable without the bot.** The backup is plain CSV and JSON, so you can open it in Excel or import it anywhere, years from now.
@@ -75,7 +75,7 @@ Set `WEBAPP_URL=https://bot.example.com` in `.env` and restart. Then:
 
 ```
 app/
-  main.py        starts the bot (long polling), scheduler and web server
+  main.py        starts the bot (polling, or webhook on Render), scheduler and web server
   bot.py         Telegram commands, quick entry, receipts, statements, edit buttons
   parser.py      quick-entry grammar
   services.py    accounts, transactions, transfers, balances, net worth, stats, CSV export
@@ -84,7 +84,8 @@ app/
   ai.py          Claude API: receipts, alerts, statements, categories, insights, questions
   reports.py     report text + AI advice;  charts.py  report chart image
   scheduler.py   per-user report times in their timezone
-  webapp.py      Mini App API (Telegram initData verified) + /ingest webhook
+  webapp.py      Mini App API (Telegram initData verified), /ingest bank alerts, Telegram webhook
+  static/app.html  the Mini App (one page, Telegram theme colors, ECharts)
   fx.py          daily exchange rates (open.er-api.com), cached in the DB
   models.py      database schema
 tests/           parser, money logic, imports, reports, full bot conversation (pytest)

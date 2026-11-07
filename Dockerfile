@@ -6,7 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         tesseract-ocr tesseract-ocr-eng tesseract-ocr-rus tesseract-ocr-uzb tesseract-ocr-uzb-cyrl \
     && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && python -c "import matplotlib.pyplot"   # build the font cache now, not at every cold start
 COPY app ./app
 EXPOSE 8080
 CMD ["python", "-m", "app.main"]

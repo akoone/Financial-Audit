@@ -32,7 +32,7 @@ def _pct_change(cur, prev) -> str:
 
 async def build_report(s: AsyncSession, user: User, kind: str, today: date | None = None,
                        with_ai: bool = True) -> Report:
-    today = today or date.today()
+    today = today or sv.local_today(user)
     kind = {"daily": "day", "weekly": "week", "monthly": "month"}.get(kind, kind)
     if kind == "month" and today.day == 1:
         # The monthly report sent on the 1st covers the whole previous month
