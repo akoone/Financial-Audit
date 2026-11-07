@@ -767,9 +767,9 @@ function renderAdd() {
       ${a.type === "transfer" ? `<span class="cur">${esc(acc ? acc.currency : "")}</span>` : `<select id="a-cur" aria-label="Currency">${curOptions(a.currency)}</select>`}
     </div>
     ${S.me.scan && a.type !== "transfer" ? `<div class="btn-row" id="a-scan">
-        <button class="btn secondary" id="a-cam">📷 Take a photo</button><button class="btn secondary" id="a-pick">🖼 Choose image</button></div>
-      <div class="muted small" id="a-scan-note" style="margin:6px 4px 0">Receipt or payment screenshot (Click, Payme, bank app): the form fills in for you.</div>
-      <input type="file" id="a-file-cam" accept="image/*" capture="environment" hidden><input type="file" id="a-file" accept="image/*" hidden>` : ""}
+        <button class="btn secondary" id="a-pick">🧾 Add a check or receipt</button></div>
+      <div class="muted small" id="a-scan-note" style="margin:6px 4px 0">Take a photo or pick one from your gallery (receipt, or a Click, Payme or bank app screenshot): the form fills in for you.</div>
+      <input type="file" id="a-file" accept="image/*" hidden>` : ""}
     ${a.type !== "transfer" ? `<div class="field"><div class="label-row"><span class="label">Category</span><button type="button" class="link small" id="a-cat-edit">Edit categories</button></div>
       <div class="chips" id="a-cats">${cats.map(x => `<button type="button" class="chip ${x.id === a.category_id ? "on" : ""}" data-cat="${x.id}">${esc(x.emoji)} ${esc(x.name)}</button>`).join("")}<button type="button" class="chip add" id="a-cat-new">＋ New</button></div></div>` : ""}
     <div class="field"><span class="label">${a.type === "transfer" ? "From" : a.type === "income" ? "Into account" : "Paid from"}</span><div class="chips scroll" id="a-acc">${accChips(accs, a.account_id)}</div></div>
@@ -813,9 +813,8 @@ function renderAdd() {
     $("#a-cat-edit", el).onclick = () => openCategories(a.type);
   }
   if ($("#a-scan", el)) {
-    $("#a-cam", el).onclick = () => $("#a-file-cam", el).click();
     $("#a-pick", el).onclick = () => $("#a-file", el).click();
-    for (const id of ["#a-file-cam", "#a-file"]) $(id, el).onchange = e => e.target.files[0] && scanFile(e.target.files[0]);
+    $("#a-file", el).onchange = e => e.target.files[0] && scanFile(e.target.files[0]);
   }
 }
 async function guessCategory() {
