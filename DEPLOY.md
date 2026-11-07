@@ -23,6 +23,7 @@ Neon's free plan includes 1 GB of storage per project (years of personal records
    - `BOT_TOKEN`: your token from @BotFather.
    - `DATABASE_URL`: the Neon string from A1.
    - `ANTHROPIC_API_KEY`: leave empty for free mode (receipts are read with free OCR).
+   - `OCR_SPACE_API_KEY` (optional, free): reads receipt photos better than the built-in reader. Get a key at https://ocr.space/ocrapi (fill in your email, the key arrives by email; free plan 25,000 images a month). The built-in Tesseract reader stays as the backup.
 4. Wait for the first deploy (about 5 minutes). In **Logs** you should see `Database: PostgreSQL (Neon)` and `Webhook mode`. Open the service's `https://....onrender.com` address: it says *Money tracker bot is running*.
 
 That's it. In Telegram, open the bot: there's now an **Open app** button next to the message box. Every push to GitHub redeploys automatically.
@@ -100,6 +101,7 @@ In `.env`, set:
 BOT_TOKEN=your token from @BotFather
 ALLOWED_USER_IDS=                 # empty = open to everyone
 ANTHROPIC_API_KEY=                # optional; empty = free OCR for receipts, no AI advice
+OCR_SPACE_API_KEY=                # optional, free key from ocr.space/ocrapi; better receipt reading
 AI_MODEL=claude-haiku-5-5         # cheapest model, if you add a key
 DEFAULT_TIMEZONE=Asia/Tashkent
 DEFAULT_CURRENCY=UZS

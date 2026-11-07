@@ -55,7 +55,7 @@ def test_russian():
     assert r.total == Decimal("1234.50") and r.currency == "RUB" and r.on == date(2026, 10, 12)
 
 
-@pytest.mark.skipif(not ocr.available(), reason="tesseract not installed")
+@pytest.mark.skipif(not ocr.tesseract_available(), reason="tesseract not installed")
 async def test_real_ocr_on_image():
     from PIL import Image, ImageDraw, ImageFont
     import io
@@ -71,3 +71,50 @@ async def test_real_ocr_on_image():
     im.save(buf, "PNG")
     r = await ocr.read_image(buf.getvalue())
     assert r.total == Decimal("51400.00") and r.currency == "UZS"
+
+
+def _photo(size=(3000, 4000)) -> bytes:
+    import io
+    import random
+    from PIL import Image
+    im = Image.new("RGB", size)
+    im.putdata([(random.randrange(256),) * 3 for _ in range(size[0] * size[1])])  # noise compresses badly
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=95)
+    return buf.getvalue()
+
+
+def test_shrinks_under_free_limit():
+    data = _photo((1600, 2000))
+    assert len(data) > ocr.OCR_SPACE_MAX_BYTES
+    assert len(ocr._jpeg_under_limit(data)) <= ocr.OCR_SPACE_MAX_BYTES
+
+
+async def test_ocr_space_first_then_tesseract(monkeypatch):
+    import httpx
+    from app.config import get_settings
+    monkeypatch.setattr(get_settings(), "ocr_space_api_key", "k")
+    sent = {}
+
+    async def fake_post(self, url, headers=None, files=None, data=None):
+        sent.update(url=url, key=headers["apikey"], size=len(files["file"][1]), table=data["isTable"])
+        return httpx.Response(200, json={"IsErroredOnProcessing": False, "OCRExitCode": 1,
+                                         "ParsedResults": [{"ParsedText": RECEIPT, "FileParseExitCode": 1}]})
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    monkeypatch.setattr(ocr, "_read_tesseract", None)  # must not be needed
+    r = await ocr.read_image(_photo((400, 500)))
+    assert r.total == Decimal("51400.00") and r.labeled
+    assert sent["url"] == ocr.OCR_SPACE_URL and sent["key"] == "k" and sent["table"] == "true"
+
+    # quota used up / service down: falls back to Tesseract
+    async def failing(self, *a, **kw):
+        return httpx.Response(200, json={"IsErroredOnProcessing": True, "ErrorMessage": ["limit reached"]})
+    monkeypatch.setattr(httpx.AsyncClient, "post", failing)
+
+    async def local(data):
+        return ocr.parse_text(PAYME)
+    monkeypatch.setattr(ocr, "_read_tesseract", local)
+    monkeypatch.setattr(ocr, "tesseract_available", lambda: True)
+    r = await ocr.read_image(_photo((400, 500)))
+    assert r.total == Decimal(50000) and r.merchant == "Uzmobile"
+    assert ocr.available()

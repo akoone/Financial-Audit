@@ -1,12 +1,14 @@
-"""Free receipt and payment-screenshot reading with Tesseract OCR (no AI key needed).
+"""Free receipt and payment-screenshot reading (no AI key needed).
 
-Less accurate than AI: it reliably finds the total, date, currency and store name, and makes a
-best effort at item lines. Used automatically when no ANTHROPIC_API_KEY is set.
+Text comes from OCR.space (free online reader, used when OCR_SPACE_API_KEY is set) with
+Tesseract on the server as the backup. Rules below then find the total, date, currency, store
+name and a best effort at item lines. Used automatically when no ANTHROPIC_API_KEY is set.
 """
 from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -14,6 +16,10 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from .config import get_settings
+
+log = logging.getLogger(__name__)
+OCR_SPACE_URL = "https://api.ocr.space/parse/image"
+OCR_SPACE_MAX_BYTES = 1_000_000  # free plan limit per image
 
 TOTAL_WORDS = ["итого", "всего", "к оплате", "jami", "jami summa", "umumiy", "to'lov", "to‘lov",
                "total", "amount", "сумма", "summa", "оплачено", "paid", "grand total", "sum to pay",
@@ -34,8 +40,12 @@ _MONEY = re.compile(r"(?<![\d.,])(\d{1,3}(?:[  '.,]\d{3})+|\d+)(?:[.,](\d{1,2})
 _DATE = re.compile(r"(\d{4})[-./](\d{1,2})[-./](\d{1,2})|(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})")
 
 
-def available() -> bool:
+def tesseract_available() -> bool:
     return shutil.which("tesseract") is not None
+
+
+def available() -> bool:
+    return bool(get_settings().ocr_space_api_key) or tesseract_available()
 
 
 @dataclass
@@ -205,7 +215,60 @@ def _score(r: OcrResult) -> tuple:
     return (r.labeled, r.total is not None, len(r.items), len(r.text))
 
 
+def _jpeg_under_limit(data: bytes, limit: int = OCR_SPACE_MAX_BYTES) -> bytes:
+    """Shrink a photo to a JPEG under the free plan's size limit."""
+    from PIL import Image, ImageOps
+
+    img = ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("RGB")
+    side = min(max(img.size), 2200)
+    while True:
+        k = side / max(img.size)
+        im = img.resize((int(img.width * k), int(img.height * k))) if k < 1 else img
+        for q in (85, 75, 65):
+            buf = io.BytesIO()
+            im.save(buf, "JPEG", quality=q, optimize=True)
+            if buf.tell() <= limit:
+                return buf.getvalue()
+        side = int(side * 0.8)
+
+
+async def _ocr_space(data: bytes, key: str) -> str | None:
+    """Text from OCR.space, or None if it fails (then Tesseract is used)."""
+    import httpx
+
+    try:
+        img = await asyncio.to_thread(_jpeg_under_limit, data)
+        async with httpx.AsyncClient(timeout=40) as c:
+            r = await c.post(OCR_SPACE_URL, headers={"apikey": key},
+                             files={"file": ("receipt.jpg", img, "image/jpeg")},
+                             data={"OCREngine": "2", "isTable": "true", "scale": "true",
+                                   "detectOrientation": "true"})
+        body = r.json()
+        if r.status_code != 200 or body.get("IsErroredOnProcessing") or not body.get("ParsedResults"):
+            log.warning("OCR.space failed (%s): %s", r.status_code, body.get("ErrorMessage") if isinstance(body, dict) else body)
+            return None
+        return "\n".join(p.get("ParsedText") or "" for p in body["ParsedResults"])
+    except Exception as e:  # network, quota, bad JSON
+        log.warning("OCR.space failed: %s", e)
+        return None
+
+
 async def read_image(data: bytes) -> OcrResult:
+    key = get_settings().ocr_space_api_key
+    online = None
+    if key:
+        text = await _ocr_space(data, key)
+        if text and text.strip():
+            online = parse_text(text)
+            if online.labeled or not tesseract_available():
+                return online
+    if not tesseract_available():
+        return online or OcrResult(text="")
+    local = await _read_tesseract(data)
+    return online if online and _score(online) >= _score(local) else local
+
+
+async def _read_tesseract(data: bytes) -> OcrResult:
     best = None
     for lang in _passes():
         r = parse_text(await asyncio.to_thread(_ocr_sync, data, lang))

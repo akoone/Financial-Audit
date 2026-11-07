@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     ai_model: str = "claude-opus-5-5"
     ai_daily_limit: int = 40
     ocr_langs: str = "eng+rus+uzb+uzb_cyrl"
+    # Free online reader (ocr.space, 25,000 images a month). Tesseract is the backup.
+    ocr_space_api_key: str = ""
 
     default_currency: str = "USD"
     default_timezone: str = "UTC"

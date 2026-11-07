@@ -168,7 +168,7 @@ async def test_receipt_and_alert_with_mocked_ai(env, monkeypatch):
 
 async def test_receipt_with_free_ocr(env, monkeypatch):
     from app import ocr
-    if not ocr.available():
+    if not ocr.tesseract_available():
         pytest.skip("tesseract not installed")
     import io
     from aiogram.types import PhotoSize
