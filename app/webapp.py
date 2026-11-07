@@ -24,7 +24,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.types import BufferedInputFile
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -210,10 +210,10 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
         return JSONResponse({"detail": f"Server error ({type(exc).__name__}). Details are in the server log."},
                             status_code=500)
 
-    @app.get("/", response_class=PlainTextResponse)
-    async def root():
-        return "Money tracker bot is running. Open it in Telegram."
-
+    # The root serves the Mini App too, so it works whichever address is set in BotFather
+    # (main Mini App, menu button, home screen shortcut). Outside Telegram the page itself
+    # says to open it from the bot.
+    @app.get("/")
     @app.get("/app")
     async def mini_app():
         return FileResponse(STATIC / "app.html", headers={"Cache-Control": "no-cache"})
