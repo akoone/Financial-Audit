@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import os
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -18,6 +19,8 @@ from decimal import Decimal, InvalidOperation
 from .config import get_settings
 
 log = logging.getLogger(__name__)
+# Tesseract is 2x slower on small shared CPUs when it splits work into threads
+os.environ.setdefault("OMP_THREAD_LIMIT", "1")
 OCR_SPACE_URL = "https://api.ocr.space/parse/image"
 OCR_SPACE_MAX_BYTES = 1_000_000  # free plan limit per image
 
@@ -192,8 +195,8 @@ def _prepare(data: bytes):
     img = Image.open(io.BytesIO(data))
     img = ImageOps.exif_transpose(img).convert("L")
     longest = max(img.size)
-    if longest > 2400:  # big camera photos: smaller is faster and reads just as well
-        k = 2400 / longest
+    if longest > 1800:  # big camera photos: smaller is faster and reads just as well
+        k = 1800 / longest
         img = img.resize((int(img.width * k), int(img.height * k)))
     elif img.width < 1600:  # upscaling helps Tesseract with small screenshot text (e.g. "+" signs)
         scale = 1600 / img.width
