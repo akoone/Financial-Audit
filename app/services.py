@@ -336,6 +336,23 @@ async def edit_debt_entry(s: AsyncSession, user: User, debt: Account, t: Transac
     return old
 
 
+async def delete_account(s: AsyncSession, user: User, acc: Account) -> int:
+    """Delete an (archived) account for good: its entries go too, including both sides of
+    transfers with other accounts. Every deleted entry is kept in the audit log."""
+    from .models import AssetValuation
+    n = 0
+    for t in await debt_entries(s, acc):
+        if await s.get(Transaction, t.id) is not None and await delete_transaction(s, user, t.id):
+            n += 1
+    await s.execute(delete(AssetValuation).where(AssetValuation.account_id == acc.id))
+    await audit(s, user, "account_deleted", detail=f"{acc.name}: {n} entries")
+    if user.default_account_id == acc.id:
+        user.default_account_id = None
+    await s.delete(acc)
+    await s.flush()
+    return n
+
+
 async def delete_debt(s: AsyncSession, user: User, debt: Account) -> int:
     """Remove a debt entered by mistake: all its entries (and the matching account moves) are
     deleted, each one logged in the audit trail, then the debt itself."""

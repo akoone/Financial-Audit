@@ -91,6 +91,15 @@
   details.archived > summary::after { content: " ▸"; }
   details.archived[open] > summary::after { content: " ▾"; }
   .btn-row .grow { flex: 1; min-width: 0; }
+  .sw { position: relative; overflow: hidden; }
+  .sw + .sw { border-top: 1px solid var(--sep); }
+  .sw > .row { position: relative; z-index: 1; border-top: 0; background: var(--card); transition: transform .2s ease; touch-action: pan-y; }
+  .sheet .sw > .row { background: var(--card); }
+  .sw-acts { position: absolute; top: 0; bottom: 0; right: 0; display: flex; }
+  .sw-btn { width: 84px; border: 0; color: #fff; font: inherit; font-size: 14px; font-weight: 600; }
+  .sw-btn.del { background: var(--bad); }
+  .sw-btn.arch { background: #8e8e93; }
+  .sw-btn.ok { background: var(--accent); color: var(--accent-text); }
   .debt-tile { padding: 12px 14px !important; text-align: left; background: var(--card) !important; border-radius: 14px; }
   .entry-sub { font-size: 12px; color: var(--hint); }
   .label-row { display: flex; justify-content: space-between; align-items: baseline; }
@@ -607,6 +616,66 @@ function renderCharts() {
 }
 
 // ---------- transaction rows & sheet ----------
+// ---------- swipe a row left to reveal actions (delete, archive) ----------
+function closeSwipes(except) {
+  $$(".sw.open").forEach(w => { if (w !== except) { w.classList.remove("open"); w.lastElementChild.style.transform = ""; } });
+}
+function swipeRows(container, selector, actionsFor) {
+  $$(selector, container).forEach(row => {
+    if (row.parentNode.classList.contains("sw")) return;
+    const acts = actionsFor(row);
+    if (!acts || !acts.length) return;
+    const wrap = document.createElement("div"); wrap.className = "sw";
+    row.parentNode.insertBefore(wrap, row);
+    const back = document.createElement("div"); back.className = "sw-acts";
+    for (const a of acts) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "sw-btn " + (a.cls || "del"); b.textContent = a.label;
+      b.onclick = e => { e.stopPropagation(); closeSwipes(); a.run(); };
+      back.appendChild(b);
+    }
+    wrap.appendChild(back); wrap.appendChild(row);
+    const W = 84 * acts.length;
+    let x0 = null, y0 = 0, dx = 0, drag = false, swiped = false;
+    row.addEventListener("touchstart", e => { const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; drag = false; row.style.transition = "none"; }, {passive: true});
+    row.addEventListener("touchmove", e => {
+      if (x0 === null) return;
+      const t = e.touches[0], mx = t.clientX - x0, my = t.clientY - y0;
+      if (!drag) {
+        if (Math.abs(mx) > 10 && Math.abs(mx) > Math.abs(my) * 1.3) { drag = true; closeSwipes(wrap); }
+        else if (Math.abs(my) > 10) { x0 = null; row.style.transition = ""; return; }
+        else return;
+      }
+      dx = Math.min(0, Math.max(-W - 40, (wrap.classList.contains("open") ? -W : 0) + mx));
+      row.style.transform = `translateX(${dx}px)`;
+    }, {passive: true});
+    const end = () => {
+      if (x0 === null) return;
+      x0 = null; row.style.transition = "";
+      if (!drag) return;
+      const open = dx < -W / 2;
+      wrap.classList.toggle("open", open);
+      row.style.transform = open ? `translateX(${-W}px)` : "";
+      if (open) haptic("light");
+      swiped = true; setTimeout(() => { swiped = false; }, 80);
+    };
+    row.addEventListener("touchend", end); row.addEventListener("touchcancel", end);
+    row.addEventListener("click", e => {  // a swipe, or a tap on an open row, doesn't open the item
+      if (swiped || wrap.classList.contains("open")) {
+        e.stopImmediatePropagation(); e.preventDefault();
+        if (!swiped) closeSwipes();
+      }
+    }, true);
+  });
+}
+document.addEventListener("touchstart", e => { const t = e.target; if (!(t && t.closest && t.closest(".sw.open"))) closeSwipes(); }, {passive: true});
+async function deleteTx(id, after) {
+  if (!await confirmAsk("Delete this entry? It stays in the change log.")) return;
+  try { await api(`/api/transactions/${id}`, {method: "DELETE"}); haptic("success"); toast("Deleted"); await afterChange(); if (after) after(); else show(S.view); }
+  catch (e) { toast(e.message); }
+}
+const txSwipe = after => row => [{label: "Delete", run: () => deleteTx(+row.dataset.tx, after)}];
+
 function txRow(t) {
   const c = baseCur();
   let title, sub, amt, cls = "";
@@ -773,6 +842,7 @@ function drawHistory() {
   if (data.has_more) html += `<div class="muted small" style="text-align:center;margin:12px">Showing the latest 300. Use search or the months to see more.</div>`;
   list.innerHTML = html;
   $$(".tx", list).forEach(b => b.onclick = () => openTx(+b.dataset.tx));
+  swipeRows(list, ".tx", txSwipe());
 }
 
 // ---------- add ----------
@@ -983,9 +1053,10 @@ function renderAccounts() {
   const arch = (m.archived || []).filter(a => !isDebt(a));
   if (arch.length) {
     html += `<details class="archived" ${S.showArchived ? "open" : ""}><summary class="section-title">Archived (${arch.length})</summary>
-      <div class="card list">${arch.map(a => `<div class="row"><span class="ico" aria-hidden="true">${TYPE_ICON[a.type] || "•"}</span>
+      <div class="card list">${arch.map(a => `<div class="row" data-arch="${a.id}"><span class="ico" aria-hidden="true">${TYPE_ICON[a.type] || "•"}</span>
         <span class="main"><div class="t">${esc(a.name)}</div><div class="sub">${esc(TYPE_NAME[a.type] || a.type)}${a.balance ? " · " + esc(money(Math.abs(a.balance), a.currency)) + " left" : " · paid off / closed"}</div></span>
         <button type="button" class="link" data-restore="${a.id}">Restore</button></div>`).join("")}</div>
+      <div class="muted small" style="margin:6px 4px 0">Swipe an archived account left to delete it for good.</div>
       <div class="muted small" style="margin:8px 4px">Archived accounts and paid-off debts keep all their history and still count in old statements.</div></details>`;
   }
   el.innerHTML = html;
@@ -996,6 +1067,18 @@ function renderAccounts() {
     catch (e) { toast(e.message); }
   });
   $("#go-debts", el).onclick = () => show("debts");
+  swipeRows(el, ".card.list > [data-a]", row => {
+    const a = accById(+row.dataset.a);
+    return a ? [{label: "Archive", cls: "arch", run: async () => {
+      if (!await confirmAsk(`Archive ${a.name}? Its entries are kept; you can restore it from Archived.`, "Archive")) return;
+      try { await api(`/api/accounts/${a.id}`, {method: "PATCH", body: {archived: true}}); toast("Archived"); await afterChange(); S.add = null; renderAccounts(); }
+      catch (e) { toast(e.message); }
+    }}] : [];
+  });
+  swipeRows(el, "[data-arch]", row => {
+    const a = (m.archived || []).find(x => x.id === +row.dataset.arch);
+    return a ? [{label: "Delete", run: () => deleteAccountForGood(a, renderAccounts)}] : [];
+  });
   fitText($("#nw-hero", el));
   $$("[data-a]", el).forEach(b => b.onclick = () => openAccount(+b.dataset.a));
   $("#acc-add", el).onclick = openNewAccount;
@@ -1058,7 +1141,8 @@ async function openAccount(id) {
       const r = await api(`/api/transactions?account_id=${a.id}&limit=5`);
       const box = $("#ac-recent");
       if (box) { box.innerHTML = r.items.length ? r.items.map(txRow).join("") : `<div class="muted small" style="padding:10px 0">No entries yet.</div>`;
-                 $$(".tx", box).forEach(b => b.onclick = () => openTx(+b.dataset.tx)); }
+                 $$(".tx", box).forEach(b => b.onclick = () => openTx(+b.dataset.tx));
+                 swipeRows(box, ".tx", txSwipe(() => { closeSheet(); renderAccounts(); })); }
     } catch (e) {}
   });
 }
@@ -1076,9 +1160,18 @@ function openCategories(kind = "expense") {
         <span class="ico" aria-hidden="true">${esc(c.emoji || "•")}</span><span class="main"><div class="t">${esc(c.name)}</div></span>
         <span class="muted" aria-hidden="true">›</span></button>`).join("")}</div>
       <button class="btn secondary" id="cg-new" style="margin-top:14px">＋ New ${kind} category</button>
-      <div class="muted small" style="margin:10px 4px">Tap one to rename it, change its icon or delete it. Entries of a deleted category are moved, never lost.</div>`, root => {
+      <div class="muted small" style="margin:10px 4px">Tap one to rename it or change its icon. Swipe left to delete it; its entries are moved, never lost.</div>`, root => {
       $$("#cg-kind button", root).forEach(b => b.onclick = () => { kind = b.dataset.k; draw(); });
       $$("[data-c]", root).forEach(b => b.onclick = () => editCategory(+b.dataset.c, kind, null, draw));
+      swipeRows(root, "[data-c]", row => {
+        const c = cats.find(x => x.id === +row.dataset.c);
+        if (!c || c.name === FALLBACK_CAT[kind]) return [];
+        return [{label: "Delete", run: async () => {
+          if (!await confirmAsk(`Delete ${c.name}? Its entries move to ${FALLBACK_CAT[kind]}.`)) return;
+          try { const r = await api(`/api/categories/${c.id}`, {method: "DELETE"}); toast(r.moved ? `Deleted. ${r.moved} entries moved to ${r.to}` : "Category deleted"); await refreshMe(); catsChanged(); draw(); }
+          catch (e) { toast(e.message); }
+        }}];
+      });
       $("#cg-new", root).onclick = () => editCategory(null, kind, null, draw);
     });
   };
@@ -1161,6 +1254,19 @@ function renderDebts() {
       <div class="sub">${a.balance ? esc(money(Math.abs(a.balance), a.currency)) + " left (archived)" : "Paid off"}</div></span><span class="muted" aria-hidden="true">›</span></button>`).join("")}</div>` : ""}`;
   $("#debt-add", el).onclick = () => openNewDebt();
   $$("[data-d]", el).forEach(b => b.onclick = () => openDebt(+b.dataset.d));
+  swipeRows(el, "[data-d]", row => {
+    const id = +row.dataset.d, a = m.accounts.find(x => x.id === id) || (m.archived || []).find(x => x.id === id);
+    return a ? [{label: "Delete", run: async () => {
+      if (!await confirmAsk(`Delete the debt with ${a.name} and all its entries? Use this for a debt added by mistake. It stays in the change log.`)) return;
+      try { await api(`/api/debts/${id}`, {method: "DELETE"}); haptic("success"); toast("Debt deleted"); await debtsChanged(); }
+      catch (e) { toast(e.message); }
+    }}] : [];
+  });
+}
+async function deleteAccountForGood(a, after) {
+  if (!await confirmAsk(`Delete ${a.name} for good? All its entries are removed too, including transfers with your other accounts (their balances change). The deletion stays in the change log.`)) return;
+  try { const r = await api(`/api/accounts/${a.id}`, {method: "DELETE"}); haptic("success"); toast(`Deleted ${a.name}${r.deleted_entries ? ` and ${r.deleted_entries} entries` : ""}`); await afterChange(); after(); }
+  catch (e) { toast(e.message); }
 }
 function openNewDebt(direction = "lent", person = "") {
   const accs = spendable(), def = accs.find(a => a.default) || accs[0];
@@ -1232,7 +1338,7 @@ async function openDebt(id) {
       <span class="main"><div class="t">${e.kind === "add" ? (owesMe ? "Lent" : "Borrowed") : (owesMe ? "Got back" : "Paid back")}</div>
         <div class="entry-sub">${esc(shortDay(e.date))}${e.account ? " · " + esc(e.account) : " · record only"}</div></span>
       <span class="amt">${esc(money(e.amount, d.currency))}</span></button>`).join("") || `<div class="muted small" style="padding:10px 0">No entries.</div>`}</div>
-    <div class="muted small" style="margin:6px 4px 0">Tap an entry to fix its amount or date, or delete it.</div>
+    <div class="muted small" style="margin:6px 4px 0">Tap an entry to fix its amount or date. Swipe it left to delete.</div>
     ${d.left && !d.archived ? `<button class="btn plain" id="dd-arch" style="margin-top:16px">Archive without payment</button>` : ""}
     <button class="btn danger" id="dd-del" style="margin-top:8px">Delete this debt</button>`, root => {
     const lk = $("#dr-link", root);
@@ -1254,6 +1360,11 @@ async function openDebt(id) {
     $("#dd-edit", root).onclick = () => editDebt(d);
     $("#dd-more", root).onclick = () => openNewDebt(owesMe ? "lent" : "borrowed", d.name);
     $$("[data-e]", root).forEach(b => b.onclick = () => editDebtEntry(d, d.entries.find(x => x.id === +b.dataset.e)));
+    swipeRows(root, "[data-e]", row => [{label: "Delete", run: async () => {
+      if (!await confirmAsk("Delete this entry? It stays in the change log.")) return;
+      try { await api(`/api/debts/${d.id}/entries/${row.dataset.e}`, {method: "DELETE"}); toast("Entry deleted"); await debtsChanged(); openDebt(d.id); }
+      catch (e) { toast(e.message); }
+    }}]);
     const arch = $("#dd-arch", root);
     if (arch) arch.onclick = async () => {
       if (!await confirmAsk(`Archive ${d.name} without recording a payment? The ${money(d.left, d.currency)} stays in its history and you can restore it later.`, "Archive")) return;

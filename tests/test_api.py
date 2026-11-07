@@ -308,6 +308,31 @@ async def test_debts_and_archive(client, s):
     assert (await client.delete(f"/api/debts/{card['id']}")).status_code == 422
 
 
+async def test_delete_archived_account(client, s):
+    await client.post("/api/setup", json={"currency": "USD", "timezone": "UTC"})
+    me = (await client.get("/api/me")).json()
+    cash = next(a for a in me["accounts"] if a["name"] == "Cash")
+    bank = next(a for a in me["accounts"] if a["name"] == "Bank")
+    await client.post("/api/transactions", json={"type": "expense", "amount": "5", "account_id": bank["id"]})
+    await client.post("/api/transactions", json={"type": "transfer", "amount": "10", "account_id": bank["id"],
+                                                 "to_account_id": cash["id"]})
+    assert (await client.delete(f"/api/accounts/{bank['id']}")).status_code == 409  # archive first
+    await client.patch(f"/api/accounts/{bank['id']}", json={"archived": True})
+    r = await client.delete(f"/api/accounts/{bank['id']}")
+    assert r.json() == {"ok": True, "deleted_entries": 2}
+    me = (await client.get("/api/me")).json()
+    assert bank["id"] not in {a["id"] for a in me["accounts"] + me["archived"]}
+    assert next(a for a in me["accounts"] if a["id"] == cash["id"])["balance"] == 0  # transfer removed both sides
+
+    # deleting a return through History reopens a paid-off debt
+    d = (await client.post("/api/debts", json={"direction": "lent", "person": "Ali", "amount": "10"})).json()["id"]
+    await client.post(f"/api/debts/{d}/repay", json={"amount": "10"})
+    assert d in {a["id"] for a in (await client.get("/api/me")).json()["archived"]}
+    ret = (await client.get(f"/api/debts/{d}")).json()["entries"][0]
+    assert (await client.delete(f"/api/transactions/{ret['id']}")).status_code == 200
+    assert d in {a["id"] for a in (await client.get("/api/me")).json()["accounts"]}
+
+
 async def test_scan_without_ocr(client, s, monkeypatch):
     from app import ocr
     monkeypatch.setattr(ocr, "available", lambda: False)

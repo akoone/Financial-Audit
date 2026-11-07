@@ -359,6 +359,8 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
             cond.append(Transaction.occurred_on <= parse_day(end, today))
         if type in ("income", "expense", "transfer", "adjustment", "debt"):
             cond.append(Transaction.type == type)
+        elif not account_id:  # plain debt records live on the Debts screen
+            cond.append(Transaction.type != "debt")
         if account_id:
             cond.append(Transaction.account_id == account_id)
         else:  # a transfer is listed once, as its outgoing side
@@ -474,8 +476,20 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
     @app.delete("/api/transactions/{tx_id}")
     async def delete_transaction(tx_id: int, ctx: Ctx = Depends(get_ctx)):
         s, user = ctx.s, ctx.need()
+        t = await s.get(Transaction, tx_id)
+        touched = []
+        if t is not None and t.user_id == user.id:
+            legs = [t]
+            if t.transfer_group:
+                legs = (await s.execute(select(Transaction).where(
+                    Transaction.transfer_group == t.transfer_group))).unique().scalars().all()
+            touched = list({x.account_id for x in legs})
         if not await sv.delete_transaction(s, user, tx_id):
             raise HTTPException(404, "Entry not found (maybe already deleted)")
+        for acc_id in touched:  # a deleted debt payment can reopen the debt
+            acc = await s.get(Account, acc_id)
+            if acc is not None and acc.type in sv.DEBT_ACCOUNT_TYPES:
+                await sv.sync_debt_state(s, user, acc)
         await s.commit()
         return {"ok": True}
 
@@ -750,6 +764,17 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
         acc = await sv.add_account(s, user, name, type_, currency, opening)
         await s.commit()
         return {"ok": True, "id": acc.id}
+
+    @app.delete("/api/accounts/{account_id}")
+    async def delete_account(account_id: int, ctx: Ctx = Depends(get_ctx)):
+        """Only archived accounts can be deleted for good (archive first, so it is never a slip)."""
+        s, user = ctx.s, ctx.need()
+        acc = await _account(s, user, account_id)
+        if not acc.archived:
+            raise HTTPException(409, "Archive the account first, then delete it from the archived list")
+        n = await sv.delete_account(s, user, acc)
+        await s.commit()
+        return {"ok": True, "deleted_entries": n}
 
     @app.patch("/api/accounts/{account_id}")
     async def edit_account(account_id: int, body: dict = Body(...), ctx: Ctx = Depends(get_ctx)):
