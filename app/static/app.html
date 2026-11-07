@@ -763,8 +763,10 @@ function renderAdd() {
       <input id="a-amount" inputmode="decimal" autocomplete="off" placeholder="0" value="${esc(a.amount)}" aria-label="Amount">
       ${a.type === "transfer" ? `<span class="cur">${esc(acc ? acc.currency : "")}</span>` : `<select id="a-cur" aria-label="Currency">${curOptions(a.currency)}</select>`}
     </div>
-    ${S.me.scan && a.type !== "transfer" ? `<button class="btn secondary" id="a-scan" style="margin-top:10px">📷 Scan a receipt or payment screenshot</button>
-      <input type="file" id="a-file" accept="image/*" hidden>` : ""}
+    ${S.me.scan && a.type !== "transfer" ? `<div class="btn-row" id="a-scan">
+        <button class="btn secondary" id="a-cam">📷 Take a photo</button><button class="btn secondary" id="a-pick">🖼 Choose image</button></div>
+      <div class="muted small" id="a-scan-note" style="margin:6px 4px 0">Receipt or payment screenshot (Click, Payme, bank app): the form fills in for you.</div>
+      <input type="file" id="a-file-cam" accept="image/*" capture="environment" hidden><input type="file" id="a-file" accept="image/*" hidden>` : ""}
     ${cats.length ? `<div class="field"><span class="label">Category</span><div class="chips" id="a-cats">${cats.map(x => `<button type="button" class="chip ${x.id === a.category_id ? "on" : ""}" data-cat="${x.id}">${esc(x.emoji)} ${esc(x.name)}</button>`).join("")}</div></div>` : ""}
     <div class="field"><span class="label">${a.type === "transfer" ? "From" : a.type === "income" ? "Into account" : "Paid from"}</span><div class="chips scroll" id="a-acc">${accChips(accs, a.account_id)}</div></div>
     ${a.type === "transfer" ? `<div class="field"><span class="label">To</span><div class="chips scroll" id="a-to">${accChips(accs.filter(x => x.id !== a.account_id), a.to_account_id, "data-to")}</div></div>` : ""}
@@ -802,8 +804,11 @@ function renderAdd() {
   $$("#a-date [data-d]", el).forEach(b => b.onclick = () => { a.date = b.dataset.d === "0" ? todayIso() : yesterdayIso(); renderAdd(); });
   $("#a-day", el).onchange = e => { if (e.target.value) { a.date = e.target.value; renderAdd(); } };
   $("#a-save", el).onclick = saveAdd;
-  const scan = $("#a-scan", el);
-  if (scan) { scan.onclick = () => $("#a-file", el).click(); $("#a-file", el).onchange = e => e.target.files[0] && scanFile(e.target.files[0]); }
+  if ($("#a-scan", el)) {
+    $("#a-cam", el).onclick = () => $("#a-file-cam", el).click();
+    $("#a-pick", el).onclick = () => $("#a-file", el).click();
+    for (const id of ["#a-file-cam", "#a-file"]) $(id, el).onchange = e => e.target.files[0] && scanFile(e.target.files[0]);
+  }
 }
 async function guessCategory() {
   const a = S.add;
@@ -832,8 +837,8 @@ function shrink(file, max = 2400) {
   });
 }
 async function scanFile(file) {
-  const btn = $("#a-scan");
-  btn.disabled = true; btn.textContent = "Reading the image…";
+  $$("#a-scan .btn").forEach(b => { b.disabled = true; });
+  const note = $("#a-scan-note"); if (note) note.textContent = "Reading the image…";
   try {
     const r = await api("/api/scan", {method: "POST", raw: await shrink(file)});
     if (!r.found) { toast("No receipt or payment found in this image."); return; }
