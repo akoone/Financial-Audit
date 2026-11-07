@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 from . import ai, db, fx, importers, ocr, services as sv
 from .config import get_settings
-from .models import ACCOUNT_TYPES, Receipt, ReceiptItem, ReportSchedule, Transaction, User
+from .models import ACCOUNT_TYPES, LIABILITY_TYPES, Receipt, ReceiptItem, ReportSchedule, Transaction, User
 from .parser import parse_entry
 from .reports import build_report
 
@@ -249,7 +249,7 @@ async def add_account(msg: Message, command: CommandObject, s, user):
     if await sv.find_account(s, user, name):
         await msg.answer("An account with that name exists.")
         return
-    if type_ in ("loan", "credit_card") and opening > 0:
+    if type_ in LIABILITY_TYPES and opening > 0:
         opening = -opening  # liabilities are negative balances
     acc = await sv.add_account(s, user, name, type_, cur, opening)
     await msg.answer(f"✅ Added <b>{html.escape(acc.name)}</b> ({type_}, {cur}), balance {sv.fmt(opening, cur)}.")

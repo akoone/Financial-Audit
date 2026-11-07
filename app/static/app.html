@@ -86,6 +86,11 @@
   .card .chip, .sheet .card .chip { background: var(--soft); }
   .chip.on, .card .chip.on { background: var(--accent); color: var(--accent-text); }
   .chip.add { background: transparent; box-shadow: inset 0 0 0 1px var(--sep); color: var(--link); }
+  details.archived > summary { cursor: pointer; list-style: none; }
+  details.archived > summary::-webkit-details-marker { display: none; }
+  details.archived > summary::after { content: " ▸"; }
+  details.archived[open] > summary::after { content: " ▾"; }
+  .btn-row .grow { flex: 1; min-width: 0; }
   .label-row { display: flex; justify-content: space-between; align-items: baseline; }
   .label-row .link { margin: 0 4px 6px; padding: 0; }
   .cam { position: fixed; inset: 0; z-index: 60; background: #000; display: none; flex-direction: column; }
@@ -298,11 +303,14 @@ const store = {get(k) { try { return localStorage.getItem(k); } catch (e) { retu
                set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }};
 const SOURCES = {text: "typed in the chat", receipt: "a receipt photo", alert: "a bank alert", import: "a statement import", app: "this app"};
 const TYPE_ICON = {cash: "💵", bank: "🏦", card: "💳", savings: "🐷", investment: "📈", crypto: "🪙", property: "🏠",
-                   vehicle: "🚗", credit_card: "💳", loan: "🧾", receivable: "🤝"};
+                   vehicle: "🚗", credit_card: "💳", loan: "🧾", receivable: "🤝", debt: "🙏"};
 const TYPE_NAME = {cash: "Cash", bank: "Bank account", card: "Card", savings: "Savings", investment: "Investments", crypto: "Crypto",
-                   property: "Property", vehicle: "Vehicle", credit_card: "Credit card", loan: "Loan", receivable: "Money owed to you"};
+                   property: "Property", vehicle: "Vehicle", credit_card: "Credit card", loan: "Loan", receivable: "Owes you", debt: "You owe"};
 const GROUPS = [["Everyday money", ["cash", "bank", "card"]], ["Savings and investments", ["savings", "investment", "crypto"]],
-                ["Things you own", ["property", "vehicle"]], ["Owed to you", ["receivable"]], ["Debts", ["credit_card", "loan"]]];
+                ["Things you own", ["property", "vehicle"]], ["Loans and credit cards", ["credit_card", "loan"]]];
+const DEBT_KINDS = ["receivable", "debt"];
+const isDebt = a => DEBT_KINDS.includes(a.type);
+const shortDay = s => parseD(s).toLocaleDateString(undefined, {day: "numeric", month: "short", year: s.slice(0, 4) === todayIso().slice(0, 4) ? undefined : "numeric"});
 const PERIOD = {day: ["Spent today", "yesterday"], week: ["Spent this week", "last week"],
                 month: ["Spent this month", "last month"], year: ["Spent this year", "last year"]};
 
@@ -624,7 +632,7 @@ function curOptions(selected) {
 function accChips(list, selected, attr = "data-acc") {
   return list.map(a => `<button type="button" class="chip ${a.id === selected ? "on" : ""}" ${attr}="${a.id}">${TYPE_ICON[a.type] || ""} ${esc(a.name)}</button>`).join("");
 }
-const spendable = () => S.me.accounts.filter(a => !["property", "vehicle"].includes(a.type));
+const spendable = () => S.me.accounts.filter(a => !["property", "vehicle", ...DEBT_KINDS].includes(a.type));
 
 async function openTx(id) {
   let t;
@@ -779,6 +787,7 @@ function renderAdd() {
   const other = ![todayIso(), yesterdayIso()].includes(a.date);
   el.innerHTML = `
     <div class="seg" id="a-type">${[["expense", "Expense"], ["income", "Income"], ["transfer", "Transfer"]].map(([k, l]) => `<button data-k="${k}" class="${a.type === k ? "on" : ""}">${l}</button>`).join("")}</div>
+    <button type="button" class="link small" id="a-debt" style="margin:8px 4px 0">🤝 Lent or borrowed money? Add a debt</button>
     <div class="amount-box" style="margin-top:12px">
       <input id="a-amount" inputmode="decimal" autocomplete="off" placeholder="0" value="${esc(a.amount)}" aria-label="Amount">
       ${a.type === "transfer" ? `<span class="cur">${esc(acc ? acc.currency : "")}</span>` : `<select id="a-cur" aria-label="Currency">${curOptions(a.currency)}</select>`}
@@ -825,6 +834,7 @@ function renderAdd() {
   $$("#a-date [data-d]", el).forEach(b => b.onclick = () => { a.date = b.dataset.d === "0" ? todayIso() : yesterdayIso(); renderAdd(); });
   $("#a-day", el).onchange = e => { if (e.target.value) { a.date = e.target.value; renderAdd(); } };
   $("#a-save", el).onclick = saveAdd;
+  $("#a-debt", el).onclick = () => openNewDebt();
   if ($("#a-cat-new", el)) {
     $("#a-cat-new", el).onclick = () => editCategory(null, a.type, c => { a.category_id = c.id; a.catPicked = true; });
     $("#a-cat-edit", el).onclick = () => openCategories(a.type);
@@ -947,6 +957,22 @@ function renderAccounts() {
   let html = `<div class="hero-label" style="margin-top:4px">Net worth</div>
     <div class="hero" id="nw-hero">${esc(money(m.net_worth, ""))}<small>${esc(c)}</small></div>
     <div class="delta">You own ${esc(money(m.assets, c))} · you owe ${esc(money(m.liabilities, c))}</div>`;
+  const debtRow = a => {
+    const overdue = a.due && a.due < serverToday();
+    return `<button type="button" class="row" data-a="${a.id}"><span class="ico" aria-hidden="true">${TYPE_ICON[a.type]}</span>
+      <span class="main"><div class="t">${esc(a.name)}</div>
+        <div class="sub ${overdue ? "neg" : ""}">${a.due ? (overdue ? "Overdue since " : "Due ") + esc(shortDay(a.due)) : esc(TYPE_NAME[a.type])}${a.note ? " · " + esc(a.note) : ""}</div></span>
+      <span class="amt ${a.type === "debt" ? "neg" : ""}">${esc(money(Math.abs(a.balance), a.currency))}</span></button>`;
+  };
+  const owed = m.accounts.filter(a => a.type === "receivable"), owe = m.accounts.filter(a => a.type === "debt");
+  html += `<div class="section-title">Debts</div>`;
+  if (owed.length || owe.length) {
+    if (owed.length) html += `<div class="label" style="margin-top:4px">People owe you</div><div class="card list">${owed.map(debtRow).join("")}</div>`;
+    if (owe.length) html += `<div class="label" style="margin-top:12px">You owe</div><div class="card list">${owe.map(debtRow).join("")}</div>`;
+  } else {
+    html += `<div class="card muted small">Lent someone money or borrowed some? Add it here and record each return until it's paid off.</div>`;
+  }
+  html += `<button class="btn secondary" id="debt-add" style="margin-top:10px">🤝 Add a debt</button>`;
   for (const [title, types] of GROUPS) {
     const list = m.accounts.filter(a => types.includes(a.type));
     if (!list.length) continue;
@@ -960,7 +986,22 @@ function renderAccounts() {
   html += `<button class="btn secondary" id="acc-add" style="margin-top:14px">＋ Add an account</button>
     <div class="muted small" style="margin:12px 4px">Tap an account to set its real balance, update a value, or make it the default.
       Investments, property and cars use the value you enter; debts show what you owe.</div>`;
+  const arch = m.archived || [];
+  if (arch.length) {
+    html += `<details class="archived" ${S.showArchived ? "open" : ""}><summary class="section-title">Archived (${arch.length})</summary>
+      <div class="card list">${arch.map(a => `<div class="row"><span class="ico" aria-hidden="true">${TYPE_ICON[a.type] || "•"}</span>
+        <span class="main"><div class="t">${esc(a.name)}</div><div class="sub">${esc(TYPE_NAME[a.type] || a.type)}${a.balance ? " · " + esc(money(Math.abs(a.balance), a.currency)) + " left" : " · paid off / closed"}</div></span>
+        <button type="button" class="link" data-restore="${a.id}">Restore</button></div>`).join("")}</div>
+      <div class="muted small" style="margin:8px 4px">Archived accounts and paid-off debts keep all their history and still count in old statements.</div></details>`;
+  }
   el.innerHTML = html;
+  const det = $("details.archived", el);
+  if (det) det.ontoggle = () => { S.showArchived = det.open; };
+  $$("[data-restore]", el).forEach(b => b.onclick = async () => {
+    try { await api(`/api/accounts/${b.dataset.restore}`, {method: "PATCH", body: {archived: false}}); toast("Restored"); await afterChange(); renderAccounts(); }
+    catch (e) { toast(e.message); }
+  });
+  $("#debt-add", el).onclick = () => openNewDebt();
   fitText($("#nw-hero", el));
   $$("[data-a]", el).forEach(b => b.onclick = () => openAccount(+b.dataset.a));
   $("#acc-add", el).onclick = openNewAccount;
@@ -968,6 +1009,7 @@ function renderAccounts() {
 async function openAccount(id) {
   const a = accById(id), c = baseCur();
   if (!a) return;
+  if (isDebt(a)) return openDebt(a);
   const what = a.valued ? "Current value" : a.liability ? "Amount you owe now" : "Real balance now";
   openSheet(`<h2><span class="ico">${TYPE_ICON[a.type] || "•"}</span>${esc(a.name)}</h2>
     <div class="card"><div class="kv strong"><span class="k">${a.liability ? "You owe" : a.valued ? "Value" : "Balance"}</span>
@@ -1098,6 +1140,102 @@ function editCategory(id, kind, onCreated, back) {
     };
   });
 }
+// ---------- personal debts ----------
+function openNewDebt(direction = "lent") {
+  const accs = spendable(), def = accs.find(a => a.default) || accs[0];
+  const st = {direction, account_id: def && def.id, person: "", amount: "", date: serverToday(), due: "", note: ""};
+  const draw = () => {
+    const acc = accById(st.account_id), lent = st.direction === "lent";
+    openSheet(`<h2>Add a debt</h2>
+      <div class="seg" id="nd-dir"><button data-k="lent" class="${lent ? "on" : ""}">I lent money</button><button data-k="borrowed" class="${lent ? "" : "on"}">I borrowed money</button></div>
+      <div class="field"><label class="label" for="nd-person">${lent ? "Who owes you?" : "Who did you borrow from?"}</label>
+        <input class="inp" id="nd-person" maxlength="50" placeholder="Name, e.g. Aziz" value="${esc(st.person)}" autocomplete="off"></div>
+      <div class="field"><label class="label" for="nd-amount">Amount</label>
+        <div class="amount-box"><input id="nd-amount" inputmode="decimal" placeholder="0" value="${esc(st.amount)}" autocomplete="off"><span class="cur">${esc(acc ? acc.currency : "")}</span></div></div>
+      <div class="field"><span class="label">${lent ? "Money went from" : "Money came into"}</span><div class="chips scroll" id="nd-acc">${accChips(accs, st.account_id)}</div></div>
+      <div class="btn-row" style="margin-top:14px">
+        <div class="grow"><label class="label" for="nd-date">Date</label><input class="inp" type="date" id="nd-date" value="${st.date}" max="${serverToday()}"></div>
+        <div class="grow"><label class="label" for="nd-due">Pay back by (optional)</label><input class="inp" type="date" id="nd-due" value="${st.due}"></div></div>
+      <div class="field"><label class="label" for="nd-note">Note (optional)</label>
+        <input class="inp" id="nd-note" maxlength="200" placeholder="e.g. for the car repair" value="${esc(st.note)}" autocomplete="off"></div>
+      <button class="btn" id="nd-save" style="margin-top:18px">Save debt</button>
+      <div class="muted small" style="margin:10px 4px">Not counted as spending or income: the money just moves between your account and this debt, so your net worth stays right.</div>`, root => {
+      const keep = () => Object.assign(st, {person: $("#nd-person", root).value, amount: $("#nd-amount", root).value,
+        date: $("#nd-date", root).value, due: $("#nd-due", root).value, note: $("#nd-note", root).value});
+      $$("#nd-dir button", root).forEach(b => b.onclick = () => { keep(); st.direction = b.dataset.k; draw(); });
+      $$("#nd-acc .chip", root).forEach(b => b.onclick = () => { keep(); st.account_id = +b.dataset.acc; draw(); });
+      $("#nd-save", root).onclick = async e => {
+        keep();
+        if (!st.person.trim()) { toast("Enter a name"); return; }
+        if (!st.amount.trim()) { toast("Enter the amount"); return; }
+        e.target.disabled = true;
+        try {
+          const r = await api("/api/debts", {method: "POST", body: {direction: st.direction, person: st.person, amount: st.amount,
+            account_id: st.account_id, date: st.date, due: st.due || null, note: st.note}});
+          haptic("success"); closeSheet(); toast(`Saved: ${r.name}`);
+          await afterChange(); if (S.view !== "accounts") show("accounts"); else renderAccounts();
+        } catch (err) { toast(err.message); e.target.disabled = false; }
+      };
+    });
+  };
+  draw();
+}
+async function openDebt(a) {
+  const owesMe = a.type === "receivable", left = Math.abs(a.balance);
+  const accs = spendable(), def = accs.find(x => x.default) || accs[0];
+  const st = {account_id: def && def.id};
+  const overdue = a.due && a.due < serverToday();
+  openSheet(`<h2><span class="ico">${TYPE_ICON[a.type]}</span>${esc(a.name)}</h2>
+    <div class="card"><div class="kv strong"><span class="k">${owesMe ? "Owes you" : "You owe"}</span><span>${esc(money(left, a.currency))}</span></div>
+      <div class="kv"><span class="k">Pay back by</span><span class="${overdue ? "neg" : ""}">${a.due ? esc(shortDay(a.due)) + (overdue ? " (overdue)" : "") : "No date"}</span></div>
+      ${a.note ? `<div class="kv"><span class="k">Note</span><span>${esc(a.note)}</span></div>` : ""}</div>
+    <div class="section-title">${owesMe ? "Got money back" : "Paid money back"}</div>
+    <div class="card">
+      <div class="btn-row" style="margin-top:0"><input class="inp" id="dr-amount" inputmode="decimal" placeholder="Amount in ${esc(a.currency)}" autocomplete="off" style="flex:2;background-color:var(--page)">
+        <button class="btn plain" id="dr-all" style="flex:1">All ${esc(money(left, ""))}</button></div>
+      <span class="label" style="margin:12px 0 6px">${owesMe ? "Into" : "From"}</span><div class="chips scroll" id="dr-acc">${accChips(accs, st.account_id)}</div>
+      <input class="inp" type="date" id="dr-date" value="${serverToday()}" max="${serverToday()}" aria-label="Date" style="margin-top:12px;background-color:var(--page)">
+      <button class="btn" id="dr-save" style="margin-top:12px">Save return</button></div>
+    <div class="section-title">Details</div>
+    <div class="card">
+      <label class="label" for="dr-due" style="margin-left:0">Pay back by</label><input class="inp" type="date" id="dr-due" value="${a.due || ""}" style="background-color:var(--page)">
+      <label class="label" for="dr-note" style="margin:12px 0 6px">Note</label><input class="inp" id="dr-note" maxlength="200" value="${esc(a.note)}" autocomplete="off" style="background-color:var(--page)">
+      <button class="btn plain" id="dr-details" style="margin-top:10px">Save details</button></div>
+    <div class="section-title">History</div><div class="card list" id="dr-hist"><div class="muted small" style="padding:10px 0">Loading…</div></div>
+    <button class="btn secondary" id="dr-more">${owesMe ? "Lend more" : "Borrow more"}</button>
+    <button class="btn danger" id="dr-close" style="margin-top:8px">Archive without payment</button>`, async root => {
+    $$("#dr-acc .chip", root).forEach(b => b.onclick = () => { st.account_id = +b.dataset.acc; $$("#dr-acc .chip", root).forEach(x => x.classList.toggle("on", x === b)); });
+    $("#dr-all", root).onclick = () => { $("#dr-amount", root).value = String(left); };
+    $("#dr-save", root).onclick = async e => {
+      const amount = $("#dr-amount", root).value.trim();
+      if (!amount) { toast("Enter the amount"); return; }
+      e.target.disabled = true;
+      try {
+        const r = await api(`/api/debts/${a.id}/repay`, {method: "POST", body: {amount, account_id: st.account_id, date: $("#dr-date", root).value}});
+        haptic("success"); closeSheet();
+        toast(r.closed ? `🎉 ${a.name}: paid off` : `Saved. ${money(r.left, a.currency)} left`);
+        await afterChange(); renderAccounts();
+      } catch (err) { toast(err.message); e.target.disabled = false; }
+    };
+    $("#dr-details", root).onclick = async () => {
+      try { await api(`/api/accounts/${a.id}`, {method: "PATCH", body: {due: $("#dr-due", root).value || null, note: $("#dr-note", root).value}});
+            toast("Saved"); await afterChange(); renderAccounts(); }
+      catch (err) { toast(err.message); }
+    };
+    $("#dr-more", root).onclick = () => openNewDebt(owesMe ? "lent" : "borrowed");
+    $("#dr-close", root).onclick = async () => {
+      if (!await confirmAsk(`Archive ${a.name} without recording a payment? The ${money(left, a.currency)} stays in its history and you can restore it later.`, "Archive")) return;
+      try { await api(`/api/accounts/${a.id}`, {method: "PATCH", body: {archived: true}}); toast("Archived"); await afterChange(); if (sheetOpen()) closeSheet(); renderAccounts(); }
+      catch (err) { toast(err.message); }
+    };
+    try {
+      const r = await api(`/api/transactions?account_id=${a.id}&limit=20`);
+      const box = $("#dr-hist");
+      if (box) { box.innerHTML = r.items.length ? r.items.map(txRow).join("") : `<div class="muted small" style="padding:10px 0">No entries yet.</div>`;
+                 $$(".tx", box).forEach(b => b.onclick = () => openTx(+b.dataset.tx)); }
+    } catch (e) {}
+  });
+}
 function openNewAccount() {
   const st = {type: "bank", currency: baseCur()};
   const draw = () => {
@@ -1105,7 +1243,7 @@ function openNewAccount() {
     const keepName = $("#na-name") ? $("#na-name").value : "", keepOpen = $("#na-open") ? $("#na-open").value : "";
     openSheet(`<h2>New account</h2>
       <div class="field" style="margin-top:0"><label class="label" for="na-name">Name</label><input class="inp" id="na-name" maxlength="60" placeholder="e.g. Kapitalbank, Humo card, Dollars at home" value="${esc(keepName)}" autocomplete="off"></div>
-      <div class="field"><span class="label">Type</span><div class="chips">${Object.keys(TYPE_NAME).map(t => `<button type="button" class="chip ${t === st.type ? "on" : ""}" data-t="${t}">${TYPE_ICON[t]} ${esc(TYPE_NAME[t])}</button>`).join("")}</div></div>
+      <div class="field"><span class="label">Type</span><div class="chips">${Object.keys(TYPE_NAME).filter(t => !DEBT_KINDS.includes(t)).map(t => `<button type="button" class="chip ${t === st.type ? "on" : ""}" data-t="${t}">${TYPE_ICON[t]} ${esc(TYPE_NAME[t])}</button>`).join("")}</div></div>
       <div class="field"><label class="label" for="na-cur">Currency</label><select class="inp" id="na-cur">${curOptions(st.currency)}</select></div>
       <div class="field"><label class="label" for="na-open">${liability ? "Amount you owe now" : valued ? "Current value" : "Balance now"}</label>
         <input class="inp" id="na-open" inputmode="decimal" placeholder="0" value="${esc(keepOpen)}" autocomplete="off"></div>

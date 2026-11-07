@@ -207,6 +207,67 @@ async def add_transfer(s: AsyncSession, user: User, src: Account, dst: Account, 
     return out, inn
 
 
+# ---------- personal debts ----------
+# A debt is an account (receivable: they owe you; debt: you owe them) plus transfers, so lending
+# or borrowing is never counted as spending or income and net worth stays right.
+DEBT_TYPES = {"lent": "receivable", "borrowed": "debt"}
+
+
+async def open_debt(s: AsyncSession, user: User, direction: str, person: str, amount: Decimal,
+                    money: Account, on: date | None = None, due: date | None = None,
+                    note: str = "") -> Account:
+    type_ = DEBT_TYPES[direction]
+    person = person.strip()[:50]
+    acc = None
+    for a in await accounts(s, user):
+        if a.name.lower() == person.lower():
+            acc = a
+            break
+    if acc is not None and acc.type != type_:  # same name, other kind of account
+        acc = None
+        person = f"{person} ({'owes me' if direction == 'lent' else 'I owe'})"
+        for a in await accounts(s, user):
+            if a.name.lower() == person.lower() and a.type == type_:
+                acc = a
+    if acc is None:
+        acc = await add_account(s, user, person, type_, money.currency)
+    if due:
+        acc.due_on = due
+    if note:
+        acc.note = note[:200]
+    if direction == "lent":
+        await add_transfer(s, user, money, acc, amount, note=f"Lent to {acc.name}", on=on)
+    else:
+        await add_transfer(s, user, acc, money, amount, note=f"Borrowed from {acc.name}", on=on)
+    return acc
+
+
+async def repay_debt(s: AsyncSession, user: User, debt: Account, amount: Decimal, money: Account,
+                     on: date | None = None) -> Decimal:
+    """Record money paid back (in the debt's currency). Returns what is still owed; at 0 the
+    debt is archived (closed) but its history stays."""
+    left = abs(await account_balance(s, debt))
+    if amount > left:
+        raise ValueError(f"Only {fmt(left, debt.currency)} is left to pay")
+    to_amount = amount if money.currency == debt.currency else None
+    if debt.type == "receivable":
+        await add_transfer(s, user, debt, money, amount, to_amount=to_amount,
+                           note=f"{debt.name} paid back", on=on)
+    else:
+        if to_amount is None:  # paying from an account in another currency
+            amount_src = await fx.convert(s, amount, debt.currency, money.currency, on)
+            await add_transfer(s, user, money, debt, amount_src, to_amount=amount,
+                               note=f"Paid back {debt.name}", on=on)
+        else:
+            await add_transfer(s, user, money, debt, amount, to_amount=amount,
+                               note=f"Paid back {debt.name}", on=on)
+    left -= amount
+    if left == 0:
+        debt.archived = True
+        await audit(s, user, "debt_closed", detail=debt.name)
+    return left
+
+
 async def delete_transaction(s: AsyncSession, user: User, tx_id: int) -> bool:
     tx = await s.get(Transaction, tx_id)
     if not tx or tx.user_id != user.id:

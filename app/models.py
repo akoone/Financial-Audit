@@ -15,9 +15,10 @@ Rate = Numeric(20, 10)
 
 ACCOUNT_TYPES = [
     "cash", "bank", "card", "savings", "investment", "crypto", "property", "vehicle",
-    "credit_card", "loan", "receivable",
+    "credit_card", "loan", "receivable", "debt",
 ]
-LIABILITY_TYPES = {"credit_card", "loan"}
+# receivable = money a person owes you; debt = money you owe a person
+LIABILITY_TYPES = {"credit_card", "loan", "debt"}
 VALUED_TYPES = {"investment", "crypto", "property", "vehicle"}  # value comes from valuations
 
 
@@ -48,6 +49,8 @@ class Account(Base):
     opening_balance: Mapped[Decimal] = mapped_column(Money, default=Decimal(0))
     include_in_net_worth: Mapped[bool] = mapped_column(Boolean, default=True)
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    due_on: Mapped[date | None] = mapped_column(Date, nullable=True)  # debts: when it should be paid back
+    note: Mapped[str] = mapped_column(String(200), default="")
 
     @property
     def is_liability(self) -> bool:

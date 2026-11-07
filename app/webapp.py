@@ -193,7 +193,8 @@ def tx_json(t: Transaction, peer: Transaction | None = None) -> dict:
 def acc_json(a: Account, balance: Decimal, value: Decimal, user: User) -> dict:
     return {"id": a.id, "name": a.name, "type": a.type, "currency": a.currency, "balance": _f(balance),
             "value": _f(value), "default": a.id == user.default_account_id, "liability": a.is_liability,
-            "valued": a.type in VALUED_TYPES, "in_net_worth": a.include_in_net_worth}
+            "valued": a.type in VALUED_TYPES, "in_net_worth": a.include_in_net_worth,
+            "due": str(a.due_on) if a.due_on else None, "note": a.note or ""}
 
 
 def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
@@ -244,6 +245,9 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
                      "default_account_id": user.default_account_id, "today": str(sv.local_today(user))},
             "net_worth": _f(nw.net), "assets": _f(nw.assets), "liabilities": _f(nw.liabilities),
             "accounts": [acc_json(a, b, v, user) for a, b, v in nw.lines],
+            "archived": [{"id": a.id, "name": a.name, "type": a.type, "currency": a.currency,
+                          "balance": _f(await sv.account_balance(s, a))}
+                         for a in await sv.accounts(s, user, include_archived=True) if a.archived],
             "categories": {k: [{"id": c.id, "name": c.name, "emoji": c.emoji} for c in cats if c.kind == k]
                            for k in ("expense", "income")},
             "reports": [{"kind": k, "time": sched[k].send_time, "enabled": sched[k].enabled}
@@ -592,6 +596,48 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
         await s.commit()
         return {"ok": True, "moved": moved, "to": target.name}
 
+    # ---------- personal debts ----------
+    @app.post("/api/debts")
+    async def add_debt(body: dict = Body(...), ctx: Ctx = Depends(get_ctx)):
+        """Lent money to someone (direction=lent) or borrowed from someone (direction=borrowed)."""
+        s, user = ctx.s, ctx.need()
+        direction = body.get("direction")
+        if direction not in sv.DEBT_TYPES:
+            raise HTTPException(422, "Pick: you lent or you borrowed")
+        person = re.sub(r"\s+", " ", str(body.get("person") or "")).strip()
+        if not person:
+            raise HTTPException(422, "Who is it? Enter a name")
+        amount = parse_number(body.get("amount"))
+        money = await _account(s, user, body.get("account_id") or user.default_account_id or 0)
+        if money.type in sv.DEBT_TYPES.values() or money.archived:
+            raise HTTPException(422, "Pick the account the money went from or into")
+        today = sv.local_today(user)
+        on = parse_day(body["date"], today) if body.get("date") else today
+        due = parse_day(body["due"], today) if body.get("due") else None
+        acc = await sv.open_debt(s, user, direction, person, amount, money, on=on, due=due,
+                                 note=str(body.get("note") or "").strip())
+        await s.commit()
+        return {"ok": True, "id": acc.id, "name": acc.name}
+
+    @app.post("/api/debts/{account_id}/repay")
+    async def repay_debt(account_id: int, body: dict = Body(...), ctx: Ctx = Depends(get_ctx)):
+        s, user = ctx.s, ctx.need()
+        debt = await _account(s, user, account_id)
+        if debt.type not in sv.DEBT_TYPES.values():
+            raise HTTPException(422, "This account isn't a personal debt")
+        money = await _account(s, user, body.get("account_id") or user.default_account_id or 0)
+        if money.type in sv.DEBT_TYPES.values() or money.archived:
+            raise HTTPException(422, "Pick the account the money went from or into")
+        amount = parse_number(body.get("amount"))
+        today = sv.local_today(user)
+        on = parse_day(body["date"], today) if body.get("date") else today
+        try:
+            left = await sv.repay_debt(s, user, debt, amount, money, on=on)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        await s.commit()
+        return {"ok": True, "left": _f(left), "closed": left == 0}
+
     @app.post("/api/accounts")
     async def add_account(body: dict = Body(...), ctx: Ctx = Depends(get_ctx)):
         s, user = ctx.s, ctx.need()
@@ -627,7 +673,14 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
             user.default_account_id = acc.id
         if "in_net_worth" in body:
             acc.include_in_net_worth = bool(body["in_net_worth"])
-        if body.get("archived"):
+        if "due" in body:
+            acc.due_on = parse_day(body["due"], sv.local_today(user)) if body["due"] else None
+        if "note" in body:
+            acc.note = str(body["note"] or "").strip()[:200]
+        if body.get("archived") is False and acc.archived:
+            acc.archived = False
+            await sv.audit(s, user, "account_restored", detail=acc.name)
+        if body.get("archived") and not acc.archived:
             others = [a for a in await sv.accounts(s, user) if a.id != acc.id]
             if not others:
                 raise HTTPException(409, "Keep at least one account")
