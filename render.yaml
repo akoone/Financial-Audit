@@ -22,5 +22,3 @@ services:
         value: Asia/Tashkent
       - key: DEFAULT_CURRENCY
         value: UZS
-      - key: ALLOWED_USER_IDS
-        value: ""

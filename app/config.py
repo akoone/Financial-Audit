@@ -33,7 +33,8 @@ class Settings(BaseSettings):
 
     @property
     def allowed_ids(self) -> set[int]:
-        return {int(x) for x in self.allowed_user_ids.replace(" ", "").split(",") if x}
+        # Telegram user IDs are numbers; anything else (a stray generated value) is ignored.
+        return {int(x) for x in self.allowed_user_ids.replace(" ", "").split(",") if x.isdigit()}
 
     @property
     def ai_enabled(self) -> bool:
