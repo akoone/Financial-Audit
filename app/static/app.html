@@ -135,7 +135,8 @@
   .hero small { font-size: 18px; font-weight: 600; color: var(--hint); margin-left: 6px; letter-spacing: 0; }
   .delta { font-size: 13px; margin-top: 2px; color: var(--hint); }
   .tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 14px 0 12px; }
-  .tile { background: var(--card); border-radius: 14px; padding: 10px 12px; min-width: 0; }
+  .tile { background: var(--card); border-radius: 14px; padding: 10px 12px; min-width: 0; border: 0; text-align: left; font: inherit; color: inherit; }
+  .nw-hint { width: 100%; border: 0; text-align: left; font: inherit; color: inherit; }
   .tile .l { color: var(--hint); font-size: 12px; }
   .tile .v { font-size: 18px; font-weight: 650; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tile .d { font-size: 12px; color: var(--hint); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -484,7 +485,7 @@ async function renderHome() {
     incDelta = `${p >= 0 ? "▲" : "▼"} ${Math.abs(p).toFixed(0)}% vs before`;
   }
   const h = d.net_worth_history || [];
-  let nwDelta = `assets ${short(d.assets)}`;
+  let nwDelta = d.liabilities ? `owe ${short(d.liabilities)}` : "all accounts";
   if (h.length > 1) {
     const target = iso(new Date(parseD(d.today).getTime() - 30 * 864e5));
     const past = [...h].reverse().find(p => p.date <= target) || h[0];
@@ -501,10 +502,12 @@ async function renderHome() {
     <div class="hero" id="hero">${esc(num(d.expense))}<small>${esc(c)}</small></div>
     <div class="delta">${delta}</div>
     <div class="tiles">
-      <div class="tile"><div class="l">Income</div><div class="v">${esc(short(d.income))}</div><div class="d">${esc(incDelta || c)}</div></div>
-      <div class="tile"><div class="l">Saved</div><div class="v ${d.net < 0 ? "neg" : ""}">${esc(short(d.net))}</div><div class="d">${d.savings_rate != null ? `${d.savings_rate.toFixed(0)}% of income` : "no income yet"}</div></div>
-      <div class="tile"><div class="l">Net worth</div><div class="v">${esc(short(d.net_worth))}</div><div class="d">${esc(nwDelta)}</div></div>
+      <button type="button" class="tile" data-go="expense"><div class="l">Expense</div><div class="v">${esc(short(d.expense))}</div><div class="d">${esc(c)}</div></button>
+      <button type="button" class="tile" data-go="income"><div class="l">Income</div><div class="v pos">${esc(short(d.income))}</div><div class="d">${esc(incDelta || c)}</div></button>
+      <button type="button" class="tile" data-go="networth"><div class="l">Net worth</div><div class="v ${d.net_worth < 0 ? "neg" : ""}">${esc(short(d.net_worth))}</div><div class="d">${esc(nwDelta)}</div></button>
     </div>
+    ${d.net_worth < 0 && !d.liabilities ? `<button type="button" class="banner nw-hint" data-go="networth"><div class="grow">Net worth is below zero because your accounts start at 0.
+      <b>Set the real balance of your cash and cards</b> once, and it becomes right.</div><span aria-hidden="true">›</span></button>` : ""}
     ${tzBanner ? `<div class="banner" id="tz-banner"><div class="grow">Reports are sent on <b>${esc(S.me.user.timezone)}</b> time. Use your phone's timezone, <b>${esc(deviceTz)}</b>?</div>
       <button class="btn" id="tz-use">Use it</button><button class="x" id="tz-x" aria-label="Dismiss">✕</button></div>` : ""}
     <div class="card"><h3>Where the money went <span class="muted small" style="font-weight:400">tap to see entries</span></h3>
@@ -531,6 +534,13 @@ async function renderHome() {
       ${d.recent.length ? `<div class="list-rows">${d.recent.map(txRow).join("")}</div>` : `<div class="muted small">Nothing yet.</div>`}</div>`;
   fitText($("#hero", el));
   $$("#period button", el).forEach(b => b.onclick = () => { S.period = b.dataset.p; haptic("light"); renderHome(); });
+  $$("[data-go]", el).forEach(b => b.onclick = () => {
+    if (b.dataset.go === "networth") { show("accounts"); return; }
+    S.hist = {...S.hist, cat: null, acc: null, q: "", type: b.dataset.go, start: d.start, end: d.end,
+              label: `${b.dataset.go === "income" ? "Income" : "Spending"} · ${PERIOD[d.period][0].replace("Spent ", "")}`};
+    S.histData = null;
+    show("history");
+  });
   $$(".rank", el).forEach(b => b.onclick = () => {
     if (!b.dataset.cat) return;
     S.hist = {...S.hist, cat: +b.dataset.cat, acc: null, q: "", type: "", start: d.start, end: d.end,
