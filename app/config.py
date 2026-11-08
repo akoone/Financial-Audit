@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     port: int = 0
     render_external_url: str = ""
     render: bool = False
+    # On Render's free plan, ping our own address every 10 minutes so the bot never sleeps
+    keep_awake: bool = True
 
     @property
     def allowed_ids(self) -> set[int]:
