@@ -44,11 +44,14 @@
     --head: var(--tg-theme-section-header-text-color, var(--hint));
     --danger: var(--tg-theme-destructive-text-color, var(--fb-danger));
     --soft: rgba(127, 127, 127, .14);
-    --safe-b: max(env(safe-area-inset-bottom, 0px), var(--tg-safe-area-inset-bottom, 0px));
+    /* bottom: system bar; capped because some Telegram builds report it far too large */
+    --safe-b: min(48px, max(env(safe-area-inset-bottom, 0px), var(--tg-safe-area-inset-bottom, 0px)));
+    /* top: in full-screen mode, room for the phone's status bar and Telegram's Close / menu buttons */
+    --safe-t: calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px));
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html { background: var(--page); }
-  body { margin: 0; min-height: 100vh; padding: 12px 16px calc(88px + var(--safe-b)); background: var(--page);
+  body { margin: 0; min-height: 100vh; padding: calc(12px + var(--safe-t)) 16px calc(88px + var(--safe-b)); background: var(--page);
          color: var(--text); font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   button { font-family: inherit; color: inherit; cursor: pointer; }
   [hidden] { display: none !important; }
@@ -1581,6 +1584,17 @@ async function boot() {
   if (tg) {
     tg.ready();
     tg.expand();
+    // Opened full screen (home screen shortcut, app list): go back to the normal sheet so
+    // Telegram's own header never covers the app. Safe-area padding covers the rest.
+    if (ver("8.0") && tg.isFullscreen) { try { tg.exitFullscreen(); } catch (e) {} }
+    const insets = () => {  // older clients don't set the CSS variables themselves
+      const a = tg.safeAreaInset || {}, c = tg.contentSafeAreaInset || {}, st = document.documentElement.style;
+      if (!getComputedStyle(document.documentElement).getPropertyValue("--tg-content-safe-area-inset-top").trim()) {
+        st.setProperty("--tg-safe-area-inset-top", (a.top || 0) + "px");
+        st.setProperty("--tg-content-safe-area-inset-top", (c.top || 0) + "px");
+      }
+    };
+    if (ver("8.0")) { insets(); for (const ev of ["safeAreaChanged", "contentSafeAreaChanged", "fullscreenChanged"]) tg.onEvent(ev, insets); }
     if (ver("7.7")) { try { tg.disableVerticalSwipes(); } catch (e) {} }
     if (ver("6.1")) tg.BackButton.onClick(goBack);
     tg.onEvent("themeChanged", () => { applyTheme(); if (S.view === "home" && S.dash) renderCharts(); });
