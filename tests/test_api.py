@@ -190,7 +190,10 @@ async def test_settings_and_files(client, s):
     assert r.status_code == 200
     me = (await client.get("/api/me")).json()
     assert me["user"]["timezone"] == "Asia/Tashkent"
-    assert me["reports"][0] == {"kind": "daily", "time": "22:30", "enabled": False}
+    assert me["reports"][0] == {"kind": "daily", "time": "22:30", "enabled": False, "next": None}
+    r = await client.post("/api/settings", json={"reports": [{"kind": "weekly", "time": "07:05", "enabled": True}]})
+    wk = next(x for x in r.json()["reports"] if x["kind"] == "weekly")
+    assert wk["time"] == "07:05" and wk["next"].endswith("T07:05")
     assert (await client.post("/api/settings", json={"timezone": "Mars/Base"})).status_code == 422
     assert (await client.post("/api/settings", json={"reports": [{"kind": "daily", "time": "25:00"}]})).status_code == 422
     assert (await client.post("/api/send", json={"what": "backup"})).status_code == 503  # no bot in this test

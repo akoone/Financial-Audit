@@ -200,6 +200,25 @@ def acc_json(a: Account, balance: Decimal, value: Decimal, user: User) -> dict:
             "due": str(a.due_on) if a.due_on else None, "note": a.note or ""}
 
 
+def _next_send(row: ReportSchedule, tz: str) -> str | None:
+    """When this report goes out next, in the user's own time (ISO, no zone)."""
+    if not row.enabled:
+        return None
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from apscheduler.triggers.cron import CronTrigger
+
+    from .scheduler import CRON
+    try:
+        hh, mm = map(int, row.send_time.split(":"))
+        zone = ZoneInfo(tz)
+        nxt = CronTrigger(hour=hh, minute=mm, timezone=zone, **CRON[row.kind]).get_next_fire_time(None, datetime.now(zone))
+        return nxt.strftime("%Y-%m-%dT%H:%M") if nxt else None
+    except Exception:
+        return None
+
+
 def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
     app = FastAPI(title="Money tracker", docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -255,7 +274,8 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
                          for a in await sv.accounts(s, user, include_archived=True) if a.archived],
             "categories": {k: [{"id": c.id, "name": c.name, "emoji": c.emoji} for c in cats if c.kind == k]
                            for k in ("expense", "income")},
-            "reports": [{"kind": k, "time": sched[k].send_time, "enabled": sched[k].enabled}
+            "reports": [{"kind": k, "time": sched[k].send_time, "enabled": sched[k].enabled,
+                         "next": _next_send(sched[k], user.timezone)}
                         for k in REPORT_KINDS if k in sched],
         }
 
@@ -291,8 +311,10 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
             row.send_time, row.enabled = at, bool(r.get("enabled", True))
         await s.commit()
         from .scheduler import schedule_user
-        schedule_user(user)
-        return {"ok": True}
+        schedule_user(user)  # takes effect right away, no restart
+        rows = (await s.execute(select(ReportSchedule).where(ReportSchedule.user_id == user.id))).scalars()
+        return {"ok": True, "reports": [{"kind": r.kind, "time": r.send_time, "enabled": r.enabled,
+                                         "next": _next_send(r, user.timezone)} for r in rows]}
 
     # ---------- dashboard ----------
 

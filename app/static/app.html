@@ -105,6 +105,8 @@
   .sw-btn.ok { background: var(--accent); color: var(--accent-text); }
   .debt-tile { padding: 12px 14px !important; text-align: left; background: var(--card) !important; border-radius: 14px; }
   .entry-sub { font-size: 12px; color: var(--hint); }
+  .time24 { display: inline-flex; align-items: center; gap: 2px; font-variant-numeric: tabular-nums; }
+  .time24 select { border: 0; background: var(--soft); color: var(--text); border-radius: 8px; padding: 6px 6px; font: inherit; -webkit-appearance: none; appearance: none; text-align: center; }
   .label-row { display: flex; justify-content: space-between; align-items: baseline; }
   .label-row .link { margin: 0 4px 6px; padding: 0; }
   .cam { position: fixed; inset: 0; z-index: 60; background: #000; display: none; flex-direction: column; }
@@ -636,6 +638,12 @@ function renderCharts() {
 }
 
 // ---------- transaction rows & sheet ----------
+function nextLabel(r, fallback) {
+  if (!r.enabled) return "Off";
+  if (!r.next) return fallback;
+  const d = new Date(r.next.slice(0, 10) + "T12:00:00");
+  return `Next: ${d.toLocaleDateString(undefined, {weekday: "short", day: "numeric", month: "short"})}, ${r.next.slice(11, 16)}`;
+}
 // ---------- amount fields: group thousands with spaces while typing (1 250 000,50) ----------
 function groupAmount(raw) {
   const m = String(raw).match(/^\s*(-?)([\d\s ]*)(?:([.,])(\d*))?\s*([a-zA-Zа-яА-Я'‘ʻ]*)\s*$/);
@@ -1513,10 +1521,13 @@ function renderMore() {
       <div class="muted small" style="margin-top:10px">The backup has every entry, account, nightly balance record and edit, as Excel-ready CSV files plus JSON.
         One is also sent to the chat automatically on the 1st of each month.</div></div>
     <div class="section-title">Automatic reports</div>
-    <div class="card" id="reports">${m.reports.map(r => `<div class="switch-row">
-        <div class="grow">${labels[r.kind][0]}<div class="sub">${labels[r.kind][1]}</div></div>
-        <input type="time" value="${esc(r.time)}" data-time="${r.kind}" aria-label="${labels[r.kind][0]} time">
-        <label class="switch"><input type="checkbox" data-on="${r.kind}" ${r.enabled ? "checked" : ""} aria-label="${labels[r.kind][0]}"><span></span></label></div>`).join("")}</div>
+    <div class="card" id="reports">${m.reports.map(r => {
+      const [hh, mm] = r.time.split(":"), mins = [...new Set([...Array.from({length: 12}, (_, i) => String(i * 5).padStart(2, "0")), mm])].sort();
+      return `<div class="switch-row">
+        <div class="grow">${labels[r.kind][0]}<div class="sub" id="next-${r.kind}">${esc(nextLabel(r, labels[r.kind][1]))}</div></div>
+        <span class="time24"><select data-h="${r.kind}" aria-label="${labels[r.kind][0]} hour">${Array.from({length: 24}, (_, i) => String(i).padStart(2, "0")).map(h => `<option ${h === hh ? "selected" : ""}>${h}</option>`).join("")}</select>:<select data-m="${r.kind}" aria-label="${labels[r.kind][0]} minutes">${mins.map(x => `<option ${x === mm ? "selected" : ""}>${x}</option>`).join("")}</select></span>
+        <label class="switch"><input type="checkbox" data-on="${r.kind}" ${r.enabled ? "checked" : ""} aria-label="${labels[r.kind][0]}"><span></span></label></div>`; }).join("")}</div>
+    <div class="muted small" style="margin:6px 4px 0">24-hour time in ${esc(m.user.timezone)}. Changes apply right away.</div>
     <div class="section-title">Settings</div>
     <div class="card">
       <label class="label" for="tz" style="margin-left:0">Timezone (for report times and dates)</label>
@@ -1539,12 +1550,19 @@ function renderMore() {
     try { await api("/api/send", {method: "POST", body: {what: b.dataset.send}}); haptic("success"); toast("Sent. Check your chat with the bot."); }
     catch (e) { toast(e.message); } finally { b.disabled = false; }
   });
-  const saveReports = async () => {
-    const reports = m.reports.map(r => ({kind: r.kind, time: $(`[data-time=${r.kind}]`, el).value || r.time, enabled: $(`[data-on=${r.kind}]`, el).checked}));
-    try { await api("/api/settings", {method: "POST", body: {reports}}); m.reports = reports; toast("Report times saved"); }
-    catch (e) { toast(e.message); }
+  const saveReports = async changed => {
+    const reports = m.reports.map(r => ({kind: r.kind, time: `${$(`[data-h=${r.kind}]`, el).value}:${$(`[data-m=${r.kind}]`, el).value}`,
+                                         enabled: $(`[data-on=${r.kind}]`, el).checked}));
+    try {
+      const res = await api("/api/settings", {method: "POST", body: {reports}});
+      m.reports = res.reports || reports;
+      for (const r of m.reports) { const n = $(`#next-${r.kind}`, el); if (n) n.textContent = nextLabel(r, labels[r.kind][1]); }
+      const r = m.reports.find(x => x.kind === changed);
+      haptic("success");
+      toast(r ? (r.enabled ? `${labels[r.kind][0]} at ${r.time}${r.next ? ". " + nextLabel(r, "") : ""}` : `${labels[r.kind][0]} turned off`) : "Saved");
+    } catch (e) { toast(e.message); }
   };
-  $$("#reports input", el).forEach(i => i.onchange = saveReports);
+  $$("#reports select, #reports input", el).forEach(i => i.onchange = () => saveReports(i.dataset.h || i.dataset.m || i.dataset.on));
   $("#set-cats", el).onclick = () => openCategories("expense");
   const home = $("#set-home", el);
   if (home) home.onclick = () => { try { tg.addToHomeScreen(); } catch (e) { toast("Your Telegram version can't add it. Update Telegram and try again."); } };
