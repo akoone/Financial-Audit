@@ -636,6 +636,37 @@ function renderCharts() {
 }
 
 // ---------- transaction rows & sheet ----------
+// ---------- amount fields: group thousands with spaces while typing (1 250 000,50) ----------
+function groupAmount(raw) {
+  const m = String(raw).match(/^\s*(-?)([\d\s ]*)(?:([.,])(\d*))?\s*([a-zA-Zа-яА-Я'‘ʻ]*)\s*$/);
+  if (!m) return raw;  // something unusual: leave it as typed
+  const [, sign, intPart, sep, dec, suffix] = m;
+  let digits = intPart.replace(/\D/g, "");
+  // "1,250" style: a comma or dot followed by exactly 3 digits and no more is a thousands mark
+  if (sep && dec.length === 3 && !suffix && digits) { digits += dec; return sign + digits.replace(/\B(?=(\d{3})+(?!\d))/g, " "); }
+  const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return sign + grouped + (sep !== undefined ? sep + dec.slice(0, 2) : "") + suffix;
+}
+function formatAmountField(el) {
+  const before = el.value, caret = el.selectionStart ?? before.length;
+  const meaningful = before.slice(0, caret).replace(/[\s ]/g, "").length;  // characters before the caret, spaces ignored
+  const after = groupAmount(before);
+  if (after === before) return;
+  el.value = after;
+  let n = 0, pos = 0;
+  while (pos < after.length && n < meaningful) { if (!/[\s ]/.test(after[pos])) n++; pos++; }
+  try { if (document.activeElement === el) el.setSelectionRange(pos, pos); } catch (e) {}
+}
+const isAmountField = el => el && el.tagName === "INPUT" && el.getAttribute("inputmode") === "decimal";
+// capture phase: the field is formatted before the page's own handlers read it
+document.addEventListener("input", e => { if (isAmountField(e.target)) formatAmountField(e.target); }, true);
+new MutationObserver(list => {  // values filled in by the app (receipt scan, "All" button, edit sheets)
+  for (const r of list) for (const n of r.addedNodes) {
+    if (n.nodeType !== 1) continue;
+    (isAmountField(n) ? [n] : n.querySelectorAll ? n.querySelectorAll('input[inputmode="decimal"]') : []).forEach(el => { if (el.value) el.value = groupAmount(el.value); });
+  }
+}).observe(document.documentElement, {childList: true, subtree: true});
+
 // ---------- swipe a row left to reveal actions (delete, archive) ----------
 function closeSwipes(except) {
   $$(".sw.open").forEach(w => { if (w !== except) { w.classList.remove("open"); w.lastElementChild.style.transform = ""; } });
@@ -1364,7 +1395,7 @@ async function openDebt(id) {
     const lk = $("#dr-link", root);
     if (lk) lk.onchange = e => { const v = $("#dr-amount", root).value; st.link = e.target.checked; draw(); $("#dr-amount").value = v; };
     $$("#dr-acc .chip", root).forEach(b => b.onclick = () => { st.account_id = +b.dataset.acc; $$("#dr-acc .chip", root).forEach(x => x.classList.toggle("on", x === b)); });
-    const all = $("#dr-all", root); if (all) all.onclick = () => { $("#dr-amount", root).value = String(d.left); };
+    const all = $("#dr-all", root); if (all) all.onclick = () => { $("#dr-amount", root).value = groupAmount(String(d.left)); };
     const save = $("#dr-save", root);
     if (save) save.onclick = async e => {
       const amount = $("#dr-amount", root).value.trim();
