@@ -85,6 +85,25 @@ async def start(bot: Bot):
             schedule_user(u, rows)
     log.info("Scheduled reports for %d users", len(users))
     asyncio.get_running_loop().create_task(_ensure_today_snapshots())
+    from .config import get_settings
+    st = get_settings()
+    if st.keep_awake and st.render_external_url:
+        # Render's free plan sleeps after 15 minutes without outside traffic, which also stops
+        # scheduled reports. Calling our own public address counts as traffic. One always-on
+        # service uses at most 744 of the 750 free hours a month.
+        from apscheduler.triggers.interval import IntervalTrigger
+        scheduler.add_job(_keep_awake, IntervalTrigger(minutes=10), id="keep_awake", replace_existing=True)
+        log.info("Keep-awake ping every 10 minutes")
+
+
+async def _keep_awake():
+    import httpx
+    from .config import get_settings
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            await c.get(get_settings().render_external_url.rstrip("/") + "/health")
+    except Exception as e:  # never let a failed ping disturb the bot
+        log.warning("keep-awake ping failed: %s", e)
 
 
 async def _ensure_today_snapshots():
