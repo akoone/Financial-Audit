@@ -1,0 +1,19 @@
+# Pings the bot so Render's free plan doesn't put it to sleep (it sleeps after 15 minutes
+# without outside traffic). Free for public repositories. GitHub may delay scheduled runs by a
+# few minutes, and pauses schedules after 60 days without commits; re-enable it in the
+# Actions tab if that happens. Set the repository variable BOT_URL to use another address.
+name: Keep bot awake
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+permissions: {}
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping /health
+        env:
+          BOT_URL: ${{ vars.BOT_URL || 'https://money-tracker-bot-4io6.onrender.com' }}
+        run: curl -fsS --retry 3 --retry-delay 20 --max-time 90 "$BOT_URL/health"
