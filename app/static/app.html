@@ -107,6 +107,8 @@
   .entry-sub { font-size: 12px; color: var(--hint); }
   .time24 { display: inline-flex; align-items: center; gap: 2px; font-variant-numeric: tabular-nums; }
   .time24 select { border: 0; background: var(--soft); color: var(--text); border-radius: 8px; padding: 6px 6px; font: inherit; -webkit-appearance: none; appearance: none; text-align: center; }
+  .range-row { margin-top: 12px; }
+  .other-row .t { font-size: 14px; }
   .label-row { display: flex; justify-content: space-between; align-items: baseline; }
   .label-row .link { margin: 0 4px 6px; padding: 0; }
   .cam { position: fixed; inset: 0; z-index: 60; background: #000; display: none; flex-direction: column; }
@@ -478,14 +480,25 @@ function showSetup() {
 // ---------- overview ----------
 async function renderHome() {
   const el = $("#v-home");
-  if (!S.dash || S.dash.period !== S.period) {
+  if (S.period === "custom" && !S.range) S.range = {start: serverToday().slice(0, 8) + "01", end: serverToday()};
+  const want = S.period === "custom" ? `custom:${S.range.start}:${S.range.end}` : S.period;
+  if (!S.dash || S.dashKey !== want) {
     if (S.dash) el.classList.add("loading"); else el.innerHTML = `<div class="empty">Loading…</div>`;
-    try { S.dash = await api(`/api/dashboard?period=${S.period}`); }
+    try {
+      S.dash = await api(`/api/dashboard?period=${S.period}` + (S.period === "custom" ? `&start=${S.range.start}&end=${S.range.end}` : ""));
+      S.dashKey = want;
+    }
     catch (e) { el.classList.remove("loading"); el.innerHTML = errorCard(e.message); return; }
     el.classList.remove("loading");
     if (S.view !== "home") return;
   }
-  const d = S.dash, c = d.currency, [label, prevLabel] = PERIOD[d.period];
+  const d = S.dash, c = d.currency;
+  const rangeName = d.period === "custom" ? `${shortDay(d.start)} – ${shortDay(d.end)}` : "";
+  const [label, prevLabel] = d.period === "custom" ? [`Spent ${rangeName}`, "the same days before"] : PERIOD[d.period];
+  const periodName = d.period === "custom" ? rangeName : PERIOD[d.period][0].replace("Spent ", "");
+  const o = d.other || {};
+  const otherRows = [["transfers", "🔁 Between your accounts", "transfer"], ["corrections", "⚖️ Balance corrections", "adjustment"],
+    ["lent", "🤝 You lent"], ["got_back", "↩️ You got back"], ["borrowed", "🙏 You borrowed"], ["paid_back", "↪️ You paid back"]].filter(([k]) => o[k]);
   let delta = "";
   if (d.prev_expense > 0) {
     const p = (d.expense - d.prev_expense) / d.prev_expense * 100;
@@ -509,7 +522,11 @@ async function renderHome() {
   const elapsed = Math.max(1, d.daily.filter(x => x.date <= d.today).length);
   const maxCat = d.by_category.length ? d.by_category[0].value : 0;
   el.innerHTML = `
-    <div class="seg" id="period">${["day", "week", "month", "year"].map(p => `<button data-p="${p}" class="${p === d.period ? "on" : ""}">${p[0].toUpperCase() + p.slice(1)}</button>`).join("")}</div>
+    <div class="seg" id="period">${["day", "week", "month", "year", "custom"].map(p => `<button data-p="${p}" class="${p === d.period ? "on" : ""}">${p === "custom" ? "Dates" : p[0].toUpperCase() + p.slice(1)}</button>`).join("")}</div>
+    ${d.period === "custom" ? `<div class="btn-row range-row">
+      <div class="grow"><label class="label" for="rg-from">From</label><input class="inp" type="date" id="rg-from" value="${d.start}" max="${d.today}"></div>
+      <div class="grow"><label class="label" for="rg-to">To</label><input class="inp" type="date" id="rg-to" value="${d.end}" max="${d.today}"></div></div>
+      <div class="chips scroll" id="rg-quick" style="margin-top:8px">${[["7", "Last 7 days"], ["30", "Last 30 days"], ["m0", "This month"], ["m1", "Last month"], ["y0", "This year"]].map(([k, l]) => `<button type="button" class="chip" data-q="${k}">${l}</button>`).join("")}</div>` : ""}
     <div class="hero-label">${label}</div>
     <div class="hero" id="hero">${esc(num(d.expense))}<small>${esc(c)}</small></div>
     <div class="delta">${delta}</div>
@@ -522,6 +539,9 @@ async function renderHome() {
       <b>Set the real balance of your cash and cards</b> once, and it becomes right.</div><span aria-hidden="true">›</span></button>` : ""}
     ${tzBanner ? `<div class="banner" id="tz-banner"><div class="grow">Reports are sent on <b>${esc(S.me.user.timezone)}</b> time. Use your phone's timezone, <b>${esc(deviceTz)}</b>?</div>
       <button class="btn" id="tz-use">Use it</button><button class="x" id="tz-x" aria-label="Dismiss">✕</button></div>` : ""}
+    ${otherRows.length ? `<div class="card"><h3>Other money moves <span class="muted small" style="font-weight:400">not spending or income</span></h3>
+      ${otherRows.map(([k, l, type]) => `<button type="button" class="row other-row" ${type ? `data-type="${type}"` : `data-debts="1"`}>
+        <span class="main"><div class="t">${l}</div></span><span class="amt">${esc(money(Math.abs(o[k]), c))}</span></button>`).join("")}</div>` : ""}
     <div class="card"><h3>Where the money went <span class="muted small" style="font-weight:400">tap to see entries</span></h3>
       ${d.by_category.length ? d.by_category.map(x => `<button class="rank" data-cat="${x.id ?? ""}" data-name="${esc(x.name)}">
           <div class="top"><span class="name">${esc(x.emoji)} ${esc(x.name)}</span><span class="val">${esc(money(x.value, ""))}</span>
@@ -546,17 +566,32 @@ async function renderHome() {
       ${d.recent.length ? `<div class="list-rows">${d.recent.map(txRow).join("")}</div>` : `<div class="muted small">Nothing yet.</div>`}</div>`;
   fitText($("#hero", el));
   $$("#period button", el).forEach(b => b.onclick = () => { S.period = b.dataset.p; haptic("light"); renderHome(); });
+  const setRange = (a, b) => { if (a > b) [a, b] = [b, a]; S.range = {start: a, end: b}; renderHome(); };
+  const rf = $("#rg-from", el), rt = $("#rg-to", el);
+  if (rf) { rf.onchange = () => rf.value && setRange(rf.value, rt.value || d.today); rt.onchange = () => rt.value && setRange(rf.value || rt.value, rt.value); }
+  $$("#rg-quick .chip", el).forEach(b => b.onclick = () => {
+    const t = parseD(d.today), k = b.dataset.q;
+    if (k === "7" || k === "30") setRange(iso(new Date(t.getTime() - (+k - 1) * 864e5)), d.today);
+    else if (k === "m0") setRange(d.today.slice(0, 8) + "01", d.today);
+    else if (k === "m1") { const first = new Date(t.getFullYear(), t.getMonth() - 1, 1), last = new Date(t.getFullYear(), t.getMonth(), 0); setRange(iso(first), iso(last)); }
+    else if (k === "y0") setRange(d.today.slice(0, 4) + "-01-01", d.today);
+  });
+  $$(".other-row", el).forEach(b => b.onclick = () => {
+    if (b.dataset.debts) { show("debts"); return; }
+    S.hist = {...S.hist, cat: null, acc: null, q: "", type: b.dataset.type, start: d.start, end: d.end, label: `${b.querySelector(".t").textContent.slice(2).trim()} · ${periodName}`};
+    S.histData = null; show("history");
+  });
   $$("[data-go]", el).forEach(b => b.onclick = () => {
     if (b.dataset.go === "networth") { show("accounts"); return; }
     S.hist = {...S.hist, cat: null, acc: null, q: "", type: b.dataset.go, start: d.start, end: d.end,
-              label: `${b.dataset.go === "income" ? "Income" : "Spending"} · ${PERIOD[d.period][0].replace("Spent ", "")}`};
+              label: `${b.dataset.go === "income" ? "Income" : "Spending"} · ${periodName}`};
     S.histData = null;
     show("history");
   });
   $$(".rank", el).forEach(b => b.onclick = () => {
     if (!b.dataset.cat) return;
     S.hist = {...S.hist, cat: +b.dataset.cat, acc: null, q: "", type: "", start: d.start, end: d.end,
-              label: `${b.dataset.name} · ${PERIOD[d.period][0].replace("Spent ", "")}`};
+              label: `${b.dataset.name} · ${periodName}`};
     S.histData = null;
     show("history");
   });

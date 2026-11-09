@@ -91,7 +91,7 @@ async def test_report_without_ai(s):
     for i, (amt, what) in enumerate([(12, "coffee"), (80, "groceries"), (30, "taxi")]):
         cat, _ = await sv.guess_category(s, u, what, "expense")
         await sv.add_transaction(s, u, card, "expense", Decimal(amt), category=cat, note=what,
-                                 on=date.today() - timedelta(days=i))
+                                 on=date.today())  # same day: always inside this week and month
     rep = await build_report(s, u, "week", with_ai=False)
     assert "Weekly report" in rep.text and "Groceries" in rep.text
     rep = await build_report(s, u, "month", with_ai=False)

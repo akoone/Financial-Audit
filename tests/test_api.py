@@ -150,6 +150,15 @@ async def test_transfers_accounts_and_statement(client, s):
     assert r.json()["adjustment"]["amount"] == -50 and r.json()["balance"] == 150
     dash = (await client.get("/api/dashboard", params={"period": "month"})).json()
     assert dash["expense"] == 0 and dash["income"] == 1000 and dash["net_worth"] == 950
+    assert dash["other"]["transfers"] == 200 and dash["other"]["corrections"] == -50
+    from datetime import date, timedelta
+    t = date.today()
+    rng = (await client.get("/api/dashboard", params={"period": "custom", "start": t.isoformat(),
+                                                        "end": (t - timedelta(days=9)).isoformat()})).json()
+    assert rng["period"] == "custom" and rng["start"] == (t - timedelta(days=9)).isoformat() and rng["end"] == t.isoformat()
+    assert rng["income"] == 1000 and rng["other"]["transfers"] == 200
+    far = await client.get("/api/dashboard", params={"period": "custom", "start": "2020-01-01", "end": t.isoformat()})
+    assert far.status_code == 422
 
     # new accounts: a loan is stored as a negative balance; an investment uses its value
     r = await client.post("/api/accounts", json={"name": "Car loan", "type": "loan", "currency": "USD", "opening": "400"})

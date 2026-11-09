@@ -319,12 +319,24 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
     # ---------- dashboard ----------
 
     @app.get("/api/dashboard")
-    async def dashboard(period: str = "month", ctx: Ctx = Depends(get_ctx)):
+    async def dashboard(period: str = "month", start: str = "", end: str = "", ctx: Ctx = Depends(get_ctx)):
         s, user = ctx.s, ctx.need()
         today = sv.local_today(user)
-        if period not in ("day", "week", "month", "year"):
-            period = "month"
-        start, end, pstart, pend = sv.period_bounds(period, today)
+        if period == "custom":  # any range, e.g. Nov 1 to Nov 10; compared with the same length before it
+            a = parse_day(start, today) if start else today.replace(day=1)
+            b = parse_day(end, today) if end else today
+            if a > b:
+                a, b = b, a
+            if (b - a).days > 3 * 366:
+                raise HTTPException(422, "Pick a range of up to 3 years")
+            start, end = a, b
+            pend = start - timedelta(days=1)
+            pstart = pend - (end - start)
+        else:
+            if period not in ("day", "week", "month", "year"):
+                period = "month"
+            start, end, pstart, pend = sv.period_bounds(period, today)
+        other = await sv.other_moves(s, user, start, end)
         cur = await sv.stats(s, user, start, end)
         prev = await sv.stats(s, user, pstart, pend)
         cat_ids = {c.name: c for c in await sv.categories(s, user)}
@@ -346,7 +358,7 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
             "currency": user.base_currency, "period": period, "today": str(today),
             "start": str(start), "end": str(end), "prev_start": str(pstart), "prev_end": str(pend),
             "income": _f(cur["income"]), "expense": _f(cur["expense"]), "net": _f(cur["net"]),
-            "count": cur["count"],
+            "count": cur["count"], "other": {k: _f(v) for k, v in other.items()},
             "savings_rate": _f(cur["savings_rate"]) if cur["savings_rate"] is not None else None,
             "prev_expense": _f(prev["expense"]), "prev_income": _f(prev["income"]),
             "by_category": [{"name": k, "value": _f(v), "id": cat_ids[k].id if k in cat_ids else None,

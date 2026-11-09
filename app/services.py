@@ -607,6 +607,31 @@ async def stats(s: AsyncSession, user: User, start: date, end: date) -> dict:
     }
 
 
+async def other_moves(s: AsyncSession, user: User, start: date, end: date) -> dict:
+    """Money that moved in [start, end] without being spending or income (base currency)."""
+    rows = (await s.execute(select(Transaction).where(
+        Transaction.user_id == user.id, Transaction.occurred_on.between(start, end),
+        Transaction.type.in_(("transfer", "adjustment", "debt"))))).unique().scalars().all()
+    out = {k: Decimal(0) for k in ("transfers", "corrections", "lent", "got_back", "borrowed", "paid_back")}
+    seen_groups = set()
+    for t in rows:
+        amt = Decimal(str(t.base_amount))
+        acc_type = t.account.type if t.account else ""
+        if acc_type == "receivable":  # money someone owes you
+            out["lent" if amt > 0 else "got_back"] += abs(amt)
+        elif acc_type == "debt":  # money you owe someone
+            out["borrowed" if amt < 0 else "paid_back"] += abs(amt)
+        elif t.type == "adjustment":
+            out["corrections"] += amt
+        elif t.type == "transfer" and amt < 0 and t.transfer_group not in seen_groups:
+            seen_groups.add(t.transfer_group)
+            peer_types = (await s.execute(select(Account.type).join(Transaction, Transaction.account_id == Account.id).where(
+                Transaction.transfer_group == t.transfer_group, Transaction.id != t.id))).scalars().all()
+            if not set(peer_types) & DEBT_ACCOUNT_TYPES:
+                out["transfers"] += -amt
+    return out
+
+
 def stats_for_ai(cur: dict, prev: dict, extra: dict | None = None) -> dict:
     """Compact, JSON-safe aggregates sent to the AI (no raw transaction history)."""
     f = lambda d: {k: float(round(v, 2)) for k, v in d.items()}  # noqa: E731
