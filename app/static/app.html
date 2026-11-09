@@ -143,6 +143,13 @@
   .delta { font-size: 13px; margin-top: 2px; color: var(--hint); }
   .tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 14px 0 12px; }
   .tile { background: var(--card); border-radius: 14px; padding: 10px 12px; min-width: 0; border: 0; text-align: left; font: inherit; color: inherit; }
+  /* Light or Dark picked in Settings: use our own colors, not Telegram's */
+  :root.own-theme {
+    --page: var(--fb-page); --card: var(--fb-card); --text: var(--fb-text); --hint: var(--fb-hint); --link: var(--fb-link);
+    --accent: var(--fb-btn); --accent-text: var(--fb-btn-text); --sep: var(--fb-sep); --head: var(--fb-hint); --danger: var(--fb-danger);
+  }
+  .tile { cursor: pointer; }
+  .tile.on { box-shadow: inset 0 0 0 2px var(--accent); }
   .nw-hint { width: 100%; border: 0; text-align: left; font: inherit; color: inherit; }
   .tile .l { color: var(--hint); font-size: 12px; }
   .tile .v { font-size: 18px; font-weight: 650; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -341,7 +348,7 @@ const shortDay = s => parseD(s).toLocaleDateString(undefined, {day: "numeric", m
 const PERIOD = {day: ["Spent today", "yesterday"], week: ["Spent this week", "last week"],
                 month: ["Spent this month", "last month"], year: ["Spent this year", "last year"]};
 
-const S = {me: null, view: "home", period: "month", dash: null, add: null, stmtMonth: null,
+const S = {me: null, view: "home", period: "month", focus: "expense", dash: null, add: null, stmtMonth: null,
            hist: {month: null, type: "", q: "", cat: null, acc: null, start: null, end: null, label: ""}, histData: null};
 let charts = {}, histSeq = 0, toastTimer = null;
 
@@ -414,9 +421,19 @@ function tokens() {
           axis: v("--axis"), card: v("--card"), sep: v("--sep")};
 }
 function applyTheme() {
-  const dark = tg && tg.colorScheme ? tg.colorScheme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
-  document.documentElement.dataset.theme = dark ? "dark" : "light";
-  if (ver("6.1")) { try { tg.setHeaderColor("secondary_bg_color"); tg.setBackgroundColor("secondary_bg_color"); } catch (e) {} }
+  const pref = store.get("theme") || "auto", root = document.documentElement;
+  const auto = tg && tg.colorScheme ? tg.colorScheme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  const dark = pref === "auto" ? auto : pref === "dark";
+  root.dataset.theme = dark ? "dark" : "light";
+  root.classList.toggle("own-theme", pref !== "auto");
+  if (!ver("6.1")) return;
+  try {
+    if (pref !== "auto" && ver("6.9")) {
+      const page = getComputedStyle(root).getPropertyValue("--fb-page").trim();
+      tg.setHeaderColor(page); tg.setBackgroundColor(page);
+      if (tg.setBottomBarColor && ver("7.10")) tg.setBottomBarColor(page);
+    } else { tg.setHeaderColor("secondary_bg_color"); tg.setBackgroundColor("secondary_bg_color"); }
+  } catch (e) {}
 }
 function fitText(el, max = 48, min = 26) {
   if (!el) return;
@@ -494,7 +511,8 @@ async function renderHome() {
   }
   const d = S.dash, c = d.currency;
   const rangeName = d.period === "custom" ? `${shortDay(d.start)} – ${shortDay(d.end)}` : "";
-  const [label, prevLabel] = d.period === "custom" ? [`Spent ${rangeName}`, "the same days before"] : PERIOD[d.period];
+  const [spentLabel, prevLabel] = d.period === "custom" ? [`Spent ${rangeName}`, "the same days before"] : PERIOD[d.period];
+  const F = S.focus;
   const periodName = d.period === "custom" ? rangeName : PERIOD[d.period][0].replace("Spent ", "");
   const o = d.other || {};
   const otherRows = [["transfers", "🔁 Between your accounts", "transfer"], ["corrections", "⚖️ Balance corrections", "adjustment"],
@@ -520,7 +538,22 @@ async function renderHome() {
   const tzBanner = S.me.user.timezone !== deviceTz && deviceTz && S.me.timezones.includes(deviceTz) && store.get("tz-dismiss") !== deviceTz;
   const days = d.daily.length;
   const elapsed = Math.max(1, d.daily.filter(x => x.date <= d.today).length);
-  const maxCat = d.by_category.length ? d.by_category[0].value : 0;
+  const saved = d.income - d.expense;
+  const pct = (a, b) => b > 0 ? (a - b) / b * 100 : null;
+  let label = spentLabel, heroVal = d.expense;
+  if (F === "income") {
+    label = spentLabel.replace("Spent", "Earned"); heroVal = d.income;
+    const p = pct(d.income, d.prev_income);
+    delta = p === null ? (d.income ? "" : "No income recorded in this period")
+      : `<span class="${p >= 0 ? "pos" : "neg"}">${p >= 0 ? "▲" : "▼"} ${Math.abs(p).toFixed(0)}%</span> vs ${prevLabel}`;
+  } else if (F === "networth") {
+    label = "Net worth now"; heroVal = d.net_worth;
+    delta = `<span class="${saved >= 0 ? "pos" : "neg"}">${saved >= 0 ? "Saved" : "Overspent"} ${esc(money(Math.abs(saved), c))}</span> ${d.period === "custom" ? "in " + esc(rangeName) : esc(spentLabel.replace("Spent ", ""))}`;
+  }
+  const cats = F === "income" ? d.income_by_category : d.by_category, catTotal = F === "income" ? d.income : d.expense;
+  const maxCat = cats.length ? cats[0].value : 0;
+  const nwAccs = S.me.accounts.filter(a => a.in_net_worth && !isDebt(a)).sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+  const maxAcc = nwAccs.length ? Math.max(...nwAccs.map(a => Math.abs(a.value))) : 0;
   el.innerHTML = `
     <div class="seg" id="period">${["day", "week", "month", "year", "custom"].map(p => `<button data-p="${p}" class="${p === d.period ? "on" : ""}">${p === "custom" ? "Dates" : p[0].toUpperCase() + p.slice(1)}</button>`).join("")}</div>
     ${d.period === "custom" ? `<div class="btn-row range-row">
@@ -528,12 +561,12 @@ async function renderHome() {
       <div class="grow"><label class="label" for="rg-to">To</label><input class="inp" type="date" id="rg-to" value="${d.end}" max="${d.today}"></div></div>
       <div class="chips scroll" id="rg-quick" style="margin-top:8px">${[["7", "Last 7 days"], ["30", "Last 30 days"], ["m0", "This month"], ["m1", "Last month"], ["y0", "This year"]].map(([k, l]) => `<button type="button" class="chip" data-q="${k}">${l}</button>`).join("")}</div>` : ""}
     <div class="hero-label">${label}</div>
-    <div class="hero" id="hero">${esc(num(d.expense))}<small>${esc(c)}</small></div>
+    <div class="hero ${F === "networth" && d.net_worth < 0 ? "neg" : ""}" id="hero">${esc(num(heroVal))}<small>${esc(c)}</small></div>
     <div class="delta">${delta}</div>
     <div class="tiles">
-      <button type="button" class="tile" data-go="expense"><div class="l">Expense</div><div class="v">${esc(short(d.expense))}</div><div class="d">${esc(c)}</div></button>
-      <button type="button" class="tile" data-go="income"><div class="l">Income</div><div class="v pos">${esc(short(d.income))}</div><div class="d">${esc(incDelta || c)}</div></button>
-      <button type="button" class="tile" data-go="networth"><div class="l">Net worth</div><div class="v ${d.net_worth < 0 ? "neg" : ""}">${esc(short(d.net_worth))}</div><div class="d">${esc(nwDelta)}</div></button>
+      <button type="button" class="tile ${F === "expense" ? "on" : ""}" data-focus="expense" aria-pressed="${F === "expense"}"><div class="l">Expense</div><div class="v">${esc(short(d.expense))}</div><div class="d">${esc(c)}</div></button>
+      <button type="button" class="tile ${F === "income" ? "on" : ""}" data-focus="income" aria-pressed="${F === "income"}"><div class="l">Income</div><div class="v pos">${esc(short(d.income))}</div><div class="d">${esc(incDelta || c)}</div></button>
+      <button type="button" class="tile ${F === "networth" ? "on" : ""}" data-focus="networth" aria-pressed="${F === "networth"}"><div class="l">Net worth</div><div class="v ${d.net_worth < 0 ? "neg" : ""}">${esc(short(d.net_worth))}</div><div class="d">${esc(nwDelta)}</div></button>
     </div>
     ${d.net_worth < 0 && !d.liabilities ? `<button type="button" class="banner nw-hint" data-go="networth"><div class="grow">Net worth is below zero because your accounts start at 0.
       <b>Set the real balance of your cash and cards</b> once, and it becomes right.</div><span aria-hidden="true">›</span></button>` : ""}
@@ -542,13 +575,18 @@ async function renderHome() {
     ${otherRows.length ? `<div class="card"><h3>Other money moves <span class="muted small" style="font-weight:400">not spending or income</span></h3>
       ${otherRows.map(([k, l, type]) => `<button type="button" class="row other-row" ${type ? `data-type="${type}"` : `data-debts="1"`}>
         <span class="main"><div class="t">${l}</div></span><span class="amt">${esc(money(Math.abs(o[k]), c))}</span></button>`).join("")}</div>` : ""}
-    <div class="card"><h3>Where the money went <span class="muted small" style="font-weight:400">tap to see entries</span></h3>
-      ${d.by_category.length ? d.by_category.map(x => `<button class="rank" data-cat="${x.id ?? ""}" data-name="${esc(x.name)}">
-          <div class="top"><span class="name">${esc(x.emoji)} ${esc(x.name)}</span><span class="val">${esc(money(x.value, ""))}</span>
-          <span class="share">${d.expense ? Math.round(x.value / d.expense * 100) : 0}%</span></div>
+    ${F === "networth" ? `<div class="card"><h3>What you own and owe <button class="link" id="go-accs">Accounts ›</button></h3>
+      ${nwAccs.map(a => `<button class="rank" data-acc="${a.id}">
+          <div class="top"><span class="name">${TYPE_ICON[a.type] || "•"} ${esc(a.name)}</span><span class="val ${a.value < 0 ? "neg" : ""}">${esc(money(a.value, ""))}</span></div>
+          <div class="bar"><i style="width:${maxAcc ? Math.max(2, Math.abs(a.value) / maxAcc * 100) : 0}%"></i></div></button>`).join("")}
+      <div class="kv strong" style="margin-top:8px"><span class="k">Net worth</span><span>${esc(money(d.net_worth, c))}</span></div></div>`
+    : `<div class="card"><h3>${F === "income" ? "Where the money came from" : "Where the money went"} <button class="link" id="see-type">All ${F === "income" ? "income" : "spending"} ›</button></h3>
+      ${cats.length ? cats.map(x => `<button class="rank" data-cat="${x.id ?? ""}" data-name="${esc(x.name)}">
+          <div class="top"><span class="name">${esc(x.emoji || "")} ${esc(x.name)}</span><span class="val">${esc(money(x.value, ""))}</span>
+          <span class="share">${catTotal ? Math.round(x.value / catTotal * 100) : 0}%</span></div>
           <div class="bar"><i style="width:${maxCat ? Math.max(2, x.value / maxCat * 100) : 0}%"></i></div></button>`).join("")
-        : `<div class="empty"><div class="big">🧾</div>No spending recorded in this period yet.<br>Tap <b>＋</b> to add one, or just type it in the chat.</div>`}
-    </div>
+        : `<div class="empty"><div class="big">🧾</div>No ${F === "income" ? "income" : "spending"} recorded in this period yet.<br>Tap <b>＋</b> to add one, or just type it in the chat.</div>`}
+    </div>`}
     ${d.period !== "day" && days > 1 ? `<div class="card chart-card" id="cc-daily"><h3>Daily spending <button class="link" data-table>Table</button></h3>
       <div class="note">${esc(money(Math.round(d.expense / elapsed), c))} a day on average</div>
       <div class="chart" id="c-daily"></div>
@@ -581,14 +619,17 @@ async function renderHome() {
     S.hist = {...S.hist, cat: null, acc: null, q: "", type: b.dataset.type, start: d.start, end: d.end, label: `${b.querySelector(".t").textContent.slice(2).trim()} · ${periodName}`};
     S.histData = null; show("history");
   });
-  $$("[data-go]", el).forEach(b => b.onclick = () => {
-    if (b.dataset.go === "networth") { show("accounts"); return; }
-    S.hist = {...S.hist, cat: null, acc: null, q: "", type: b.dataset.go, start: d.start, end: d.end,
-              label: `${b.dataset.go === "income" ? "Income" : "Spending"} · ${periodName}`};
-    S.histData = null;
-    show("history");
-  });
+  $$("[data-focus]", el).forEach(b => b.onclick = () => { S.focus = b.dataset.focus; haptic("light"); renderHome(); });
+  $$("[data-go]", el).forEach(b => b.onclick = () => show("accounts"));
+  const ga = $("#go-accs", el); if (ga) ga.onclick = () => show("accounts");
+  const st = $("#see-type", el);
+  if (st) st.onclick = () => {
+    S.hist = {...S.hist, cat: null, acc: null, q: "", type: F, start: d.start, end: d.end,
+              label: `${F === "income" ? "Income" : "Spending"} · ${periodName}`};
+    S.histData = null; show("history");
+  };
   $$(".rank", el).forEach(b => b.onclick = () => {
+    if (b.dataset.acc) { openAccount(+b.dataset.acc); return; }
     if (!b.dataset.cat) return;
     S.hist = {...S.hist, cat: +b.dataset.cat, acc: null, q: "", type: "", start: d.start, end: d.end,
               label: `${b.dataset.name} · ${periodName}`};
@@ -1570,6 +1611,9 @@ function renderMore() {
       ${deviceTz && deviceTz !== m.user.timezone && m.timezones.includes(deviceTz) ? `<button class="link" id="tz-dev">Use this phone's timezone: ${esc(deviceTz)}</button>` : ""}
       <div class="kv" style="margin-top:10px"><span class="k">Base currency</span><span>${esc(m.user.base_currency)}</span></div>
       <div class="muted small">To change it, send <b>/currency</b> in the chat. Past entries are converted at their own day's rate.</div></div>
+    <div class="card" style="margin-top:10px"><div class="label" style="margin-left:0">Look</div>
+      <div class="seg" id="theme-seg">${[["auto", "Auto"], ["light", "☀️ Day"], ["dark", "🌙 Night"]].map(([k, l]) => `<button type="button" data-th="${k}" class="${(store.get("theme") || "auto") === k ? "on" : ""}">${l}</button>`).join("")}</div>
+      <div class="muted small" style="margin-top:6px">Auto follows Telegram's day or night mode.</div></div>
     <button class="btn secondary" id="set-cats" style="margin-top:10px">🏷 Edit categories</button>
     ${ver("8.0") && tg.addToHomeScreen ? `<button class="btn secondary" id="set-home" style="margin-top:10px">📲 Add the app to your home screen</button>` : ""}
     <div class="section-title">Where your data lives</div>
@@ -1599,6 +1643,11 @@ function renderMore() {
   };
   $$("#reports select, #reports input", el).forEach(i => i.onchange = () => saveReports(i.dataset.h || i.dataset.m || i.dataset.on));
   $("#set-cats", el).onclick = () => openCategories("expense");
+  $$("#theme-seg button", el).forEach(b => b.onclick = () => {
+    store.set("theme", b.dataset.th); applyTheme(); haptic("light");
+    $$("#theme-seg button", el).forEach(x => x.classList.toggle("on", x === b));
+    Object.values(charts).forEach(ch => { try { ch.dispose(); } catch (e) {} }); charts = {};
+  });
   const home = $("#set-home", el);
   if (home) home.onclick = () => { try { tg.addToHomeScreen(); } catch (e) { toast("Your Telegram version can't add it. Update Telegram and try again."); } };
   const setTz = async z => {

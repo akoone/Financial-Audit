@@ -339,7 +339,9 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
         other = await sv.other_moves(s, user, start, end)
         cur = await sv.stats(s, user, start, end)
         prev = await sv.stats(s, user, pstart, pend)
-        cat_ids = {c.name: c for c in await sv.categories(s, user)}
+        all_cats = await sv.categories(s, user)
+        cat_ids = {c.name: c for c in all_cats if c.kind == "expense"}
+        inc_ids = {c.name: c for c in all_cats if c.kind == "income"}
 
         months = []
         m_end = today
@@ -364,7 +366,9 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
             "by_category": [{"name": k, "value": _f(v), "id": cat_ids[k].id if k in cat_ids else None,
                              "emoji": cat_ids[k].emoji if k in cat_ids else ""}
                             for k, v in cur["by_category"].items()],
-            "income_by_category": [{"name": k, "value": _f(v)} for k, v in cur["income_by_category"].items()],
+            "income_by_category": [{"name": k, "value": _f(v), "id": inc_ids[k].id if k in inc_ids else None,
+                                    "emoji": inc_ids[k].emoji if k in inc_ids else ""}
+                                   for k, v in cur["income_by_category"].items()],
             "daily": [{"date": str(d), "value": _f(v)} for d, v in cur["daily"].items()],
             "months": months,
             "net_worth": _f(nw.net), "assets": _f(nw.assets), "liabilities": _f(nw.liabilities),
