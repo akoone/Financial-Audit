@@ -149,13 +149,20 @@
     --accent: var(--fb-btn); --accent-text: var(--fb-btn-text); --sep: var(--fb-sep); --head: var(--fb-hint); --danger: var(--fb-danger);
   }
   .tile { cursor: pointer; }
-  .name-card { position: relative; display: block; width: 100%; margin: 2px 0 14px; padding: 16px 18px 14px; border-radius: 18px; font: inherit; color: inherit; text-align: center;
-    background: var(--card); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-    box-shadow: inset 0 0 0 5px var(--card), inset 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent); }
+  .name-card { --gold: #b38b2d; position: relative; display: block; width: 100%; margin: 2px 0 14px; padding: 18px; border-radius: 20px;
+    font: inherit; color: inherit; text-align: center; background: var(--card); border: 1.5px solid var(--gold); overflow: hidden; }
+  :root[data-theme="dark"] .name-card { --gold: #d4af37; }
+  /* Islamic border: a band of eight-pointed stars between two gold rules */
+  .name-card::before { content: ""; position: absolute; inset: 3px; border-radius: 17px; background: var(--gold); opacity: .85;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%23000' stroke-width='1.3'%3E%3Crect x='6.5' y='6.5' width='11' height='11'/%3E%3Crect x='6.5' y='6.5' width='11' height='11' transform='rotate(45 12 12)'/%3E%3Cpath d='M19.8 12H24M0 12h4.2M12 0v4.2M12 19.8V24'/%3E%3C/g%3E%3Cg fill='%23000'%3E%3Ccircle cx='12' cy='12' r='1.7'/%3E%3Ccircle r='2.2'/%3E%3Ccircle cx='24' r='2.2'/%3E%3Ccircle cy='24' r='2.2'/%3E%3Ccircle cx='24' cy='24' r='2.2'/%3E%3C/g%3E%3C/svg%3E") 0 0 / 15px 15px round; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%23000' stroke-width='1.3'%3E%3Crect x='6.5' y='6.5' width='11' height='11'/%3E%3Crect x='6.5' y='6.5' width='11' height='11' transform='rotate(45 12 12)'/%3E%3Cpath d='M19.8 12H24M0 12h4.2M12 0v4.2M12 19.8V24'/%3E%3C/g%3E%3Cg fill='%23000'%3E%3Ccircle cx='12' cy='12' r='1.7'/%3E%3Ccircle r='2.2'/%3E%3Ccircle cx='24' r='2.2'/%3E%3Ccircle cy='24' r='2.2'/%3E%3Ccircle cx='24' cy='24' r='2.2'/%3E%3C/g%3E%3C/svg%3E") 0 0 / 15px 15px round; }
+  .name-card .inner { position: relative; padding: 14px 14px 12px; border-radius: 10px; background: var(--card); border: 1.5px solid var(--gold);
+    box-shadow: 0 0 0 3px var(--card); }
+  .name-card .orn { display: flex; align-items: center; gap: 8px; color: var(--gold); font-size: 15px; margin: 4px auto 2px; max-width: 220px; }
+  .name-card .orn::before, .name-card .orn::after { content: ""; flex: 1; height: 1px; background: currentColor; opacity: .7; }
   .name-card .ar { font-size: 34px; line-height: 1.5; font-family: "Noto Naskh Arabic", "Geeza Pro", "Amiri", serif; }
   .name-card .tr { font-weight: 650; font-size: 16px; margin-top: 2px; }
   .name-card .en { font-size: 13px; color: var(--hint); margin-top: 2px; }
-  .name-card .no { position: absolute; top: 10px; left: 14px; font-size: 11px; color: var(--hint); }
+  .name-card .no { position: absolute; top: 8px; left: 10px; font-size: 11px; color: var(--gold); font-weight: 600; }
   .name-card.fade { animation: nmfade .35s ease; }
   @keyframes nmfade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
   .tile.on { box-shadow: inset 0 0 0 2px var(--accent); }
@@ -485,8 +492,8 @@ async function drawName(el, fade) {
   try { list = await loadNames(); } catch (e) { box.remove(); return; }
   if (nameIdx < 0) pickName();
   const [ar, tr, en] = list[nameIdx];
-  box.innerHTML = `<span class="no">${nameIdx + 1} / 99</span><div class="ar" lang="ar" dir="rtl">${esc(ar)}</div>
-    <div class="tr">${esc(tr)}</div><div class="en">${esc(en)}</div>`;
+  box.innerHTML = `<div class="inner"><span class="no">${nameIdx + 1}</span><div class="ar" lang="ar" dir="rtl">${esc(ar)}</div>
+    <div class="orn" aria-hidden="true">۞</div><div class="tr">${esc(tr)}</div><div class="en">${esc(en)}</div></div>`;
   box.setAttribute("aria-label", `${tr}, ${en}. Tap for another name`);
   box.classList.toggle("fade", !!fade);
   box.hidden = false;
