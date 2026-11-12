@@ -149,6 +149,18 @@
     --accent: var(--fb-btn); --accent-text: var(--fb-btn-text); --sep: var(--fb-sep); --head: var(--fb-hint); --danger: var(--fb-danger);
   }
   .tile { cursor: pointer; }
+  .names-tile { display: flex; align-items: center; gap: 10px; width: 100%; margin-top: 10px; border: 0; text-align: left; font: inherit; color: inherit; }
+  .ar-title { font-size: 26px; color: var(--hint); margin: 0 4px 4px; text-align: left; font-family: "Noto Naskh Arabic", "Geeza Pro", "Amiri", serif; }
+  .name99 { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--sep); }
+  .name99:last-child { border-bottom: 0; }
+  .name99 .no { flex: none; width: 30px; height: 30px; border-radius: 50%; background: var(--soft); display: grid; place-items: center; font-size: 12px; font-weight: 600; color: var(--hint); }
+  .name99 .grow { flex: 1; min-width: 0; }
+  .name99 .tr { font-weight: 600; }
+  .name99 .en { font-size: 13px; color: var(--hint); margin-top: 1px; }
+  .name99 .ar { flex: none; max-width: 48%; font-size: 24px; line-height: 1.5; text-align: right; font-family: "Noto Naskh Arabic", "Geeza Pro", "Amiri", serif; }
+  .name99.big { border: 0; padding: 4px 0; }
+  .name99.big .ar { font-size: 34px; }
+  .name99.big .tr { font-size: 18px; }
   .tile.on { box-shadow: inset 0 0 0 2px var(--accent); }
   .nw-hint { width: 100%; border: 0; text-align: left; font: inherit; color: inherit; }
   .tile .l { color: var(--hint); font-size: 12px; }
@@ -289,6 +301,7 @@
 <section class="view" id="v-accounts" hidden></section>
 <section class="view" id="v-more" hidden></section>
 <section class="view" id="v-debts" hidden></section>
+<section class="view" id="v-names" hidden></section>
 
 <nav class="tabbar" id="tabbar" hidden>
   <button type="button" data-view="home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 9.8V20h13V9.8"/></svg>Overview</button>
@@ -413,7 +426,7 @@ function updateBack() {
   if (!ver("6.1")) return;
   if (camStream || sheetOpen() || S.view !== "home") tg.BackButton.show(); else tg.BackButton.hide();
 }
-function goBack() { if (camStream) closeCamera(); else if (sheetOpen()) closeSheet(); else show(S.view === "debts" ? "accounts" : "home"); }
+function goBack() { if (camStream) closeCamera(); else if (sheetOpen()) closeSheet(); else show(S.view === "debts" ? "accounts" : S.view === "names" ? "more" : "home"); }
 function errorCard(msg) { return `<div class="card"><b>Couldn't load</b><div class="muted small" style="margin-top:4px">${esc(msg)}</div></div>`; }
 function tokens() {
   const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim();
@@ -455,7 +468,46 @@ function show(view) {
   window.scrollTo(0, 0);
   updateBack();
   $$("#tabbar button").forEach(b => { if (view === "debts" && b.dataset.view === "accounts") b.classList.add("on"); });
-  ({home: renderHome, history: renderHistory, add: renderAdd, accounts: renderAccounts, more: renderMore, debts: renderDebts})[view]();
+  $$("#tabbar button").forEach(b => { if (view === "names" && b.dataset.view === "more") b.classList.add("on"); });
+  ({home: renderHome, history: renderHistory, add: renderAdd, accounts: renderAccounts, more: renderMore, debts: renderDebts, names: renderNames})[view]();
+}
+
+// ---------- 99 Names of Allah ----------
+let NAMES = null;
+async function loadNames() {
+  if (!NAMES) { const r = await fetch("/names99.json"); if (!r.ok) throw new Error("Couldn't load the names"); NAMES = await r.json(); }
+  return NAMES;
+}
+function nameOfDay() {  // a different name each day, going through all 99 in turn
+  const t = parseD(serverToday());
+  return Math.floor((t - new Date(t.getFullYear(), 0, 1)) / 864e5) % 99;
+}
+function nameCard([ar, tr, en], i, big) {
+  return `<div class="name99 ${big ? "big" : ""}" id="nm-${i + 1}"><span class="no">${i + 1}</span>
+    <div class="grow"><div class="tr">${esc(tr)}</div><div class="en">${esc(en)}</div></div>
+    <div class="ar" lang="ar" dir="rtl">${esc(ar)}</div></div>`;
+}
+async function renderNames() {
+  const el = $("#v-names");
+  el.innerHTML = `<div class="empty">Loading…</div>`;
+  let list;
+  try { list = await loadNames(); } catch (e) { el.innerHTML = errorCard(e.message); return; }
+  if (S.view !== "names") return;
+  const today = nameOfDay();
+  el.innerHTML = `<h2 style="margin:4px 4px 2px">99 Names of Allah</h2>
+    <div class="ar-title" lang="ar" dir="rtl">أَسْمَاءُ اللَّهِ الْحُسْنَىٰ</div>
+    <div class="section-title">Name of the day</div>
+    <div class="card">${nameCard(list[today], today, true)}</div>
+    <input class="inp" id="nm-q" type="search" placeholder="Search by name, meaning or number" style="margin:12px 0 8px" autocomplete="off">
+    <div class="card" id="nm-list"></div>`;
+  const draw = q => {
+    q = q.trim().toLowerCase();
+    const plain = s => s.toLowerCase().replace(/['\u2019-]/g, "");
+    const rows = list.map((n, i) => [n, i]).filter(([n, i]) => !q || String(i + 1) === q || plain(n[1]).includes(plain(q)) || n[2].toLowerCase().includes(q) || n[0].includes(q));
+    $("#nm-list", el).innerHTML = rows.length ? rows.map(([n, i]) => nameCard(n, i)).join("") : `<div class="muted small">No name matches “${esc(q)}”.</div>`;
+  };
+  draw("");
+  $("#nm-q", el).oninput = e => draw(e.target.value);
 }
 
 // ---------- first run ----------
@@ -1616,6 +1668,8 @@ function renderMore() {
       <div class="muted small" style="margin-top:6px">Auto follows Telegram's day or night mode.</div></div>
     <button class="btn secondary" id="set-cats" style="margin-top:10px">🏷 Edit categories</button>
     ${ver("8.0") && tg.addToHomeScreen ? `<button class="btn secondary" id="set-home" style="margin-top:10px">📲 Add the app to your home screen</button>` : ""}
+    <button type="button" class="card names-tile" id="go-names"><span class="grow"><b>📿 99 Names of Allah</b>
+      <span class="muted small" id="nm-today" style="display:block;margin-top:2px">Arabic, meaning and a name for each day</span></span><span aria-hidden="true">›</span></button>
     <div class="section-title">Where your data lives</div>
     <div class="card small">
       <div class="kv"><span class="k">Database</span><span>${esc(m.storage)}</span></div>
@@ -1643,6 +1697,8 @@ function renderMore() {
   };
   $$("#reports select, #reports input", el).forEach(i => i.onchange = () => saveReports(i.dataset.h || i.dataset.m || i.dataset.on));
   $("#set-cats", el).onclick = () => openCategories("expense");
+  $("#go-names", el).onclick = () => show("names");
+  loadNames().then(l => { const i = nameOfDay(), t = $("#nm-today", el); if (t) t.textContent = `Today: ${l[i][1]}, ${l[i][2]}`; }).catch(() => {});
   $$("#theme-seg button", el).forEach(b => b.onclick = () => {
     store.set("theme", b.dataset.th); applyTheme(); haptic("light");
     $$("#theme-seg button", el).forEach(x => x.classList.toggle("on", x === b));

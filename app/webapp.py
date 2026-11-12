@@ -237,6 +237,10 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
     async def mini_app():
         return FileResponse(STATIC / "app.html", headers={"Cache-Control": "no-cache"})
 
+    @app.get("/names99.json")
+    async def names99():
+        return FileResponse(STATIC / "names99.json", headers={"Cache-Control": "public, max-age=86400"})
+
     @app.api_route("/health", methods=["GET", "HEAD"])
     async def health():
         # never touches the database, so pings don't keep it awake
