@@ -239,7 +239,7 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
 
     @app.get("/names99.json")
     async def names99():
-        return FileResponse(STATIC / "names99.json", headers={"Cache-Control": "public, max-age=86400"})
+        return FileResponse(STATIC / "names99.json", headers={"Cache-Control": "no-cache"})
 
     @app.api_route("/health", methods=["GET", "HEAD"])
     async def health():

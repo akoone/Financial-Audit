@@ -478,7 +478,7 @@ function show(view) {
 // ---------- 99 Names of Allah: a random one at the top of the Overview ----------
 let NAMES = null, nameIdx = -1;
 async function loadNames() {
-  if (!NAMES) { const r = await fetch("/names99.json"); if (!r.ok) throw new Error("Couldn't load the names"); NAMES = await r.json(); }
+  if (!NAMES) { const r = await fetch("/names99.json?v=uz1"); if (!r.ok) throw new Error("Couldn't load the names"); NAMES = await r.json(); }
   return NAMES;
 }
 function pickName() {  // a new random name each time the Overview opens (never the same one twice in a row)
