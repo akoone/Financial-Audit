@@ -201,6 +201,39 @@ class SnapshotLine(Base):
     fx_rate: Mapped[Decimal] = mapped_column(Rate, default=Decimal(1))
 
 
+NOTE_COLORS = ["", "yellow", "green", "blue", "pink", "purple", "orange", "gray"]
+
+
+class WorkNote(Base):
+    """A note tied to a day, like a notes app; with start/end times it also records a working day."""
+    __tablename__ = "work_notes"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    day: Mapped[date] = mapped_column(Date, index=True)
+    title: Mapped[str] = mapped_column(String(120), default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    color: Mapped[str] = mapped_column(String(12), default="")
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    worked: Mapped[bool] = mapped_column(Boolean, default=False)  # counts as a working day
+    start: Mapped[str] = mapped_column(String(5), default="")  # HH:MM
+    end: Mapped[str] = mapped_column(String(5), default="")
+    break_min: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    @property
+    def minutes(self) -> int:
+        """Worked minutes from start/end (an end before the start means past midnight), minus the break."""
+        if not (self.worked and self.start and self.end):
+            return 0
+        h1, m1 = map(int, self.start.split(":"))
+        h2, m2 = map(int, self.end.split(":"))
+        mins = (h2 * 60 + m2) - (h1 * 60 + m1)
+        if mins <= 0:
+            mins += 24 * 60
+        return max(0, mins - (self.break_min or 0))
+
+
 class AuditLog(Base):
     """Every change and deletion of a transaction, with the full record before the change."""
     __tablename__ = "audit_log"

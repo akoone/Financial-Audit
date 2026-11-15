@@ -801,8 +801,10 @@ async def backup_zip(s: AsyncSession, user: User) -> bytes:
     """Complete copy of the user's data: CSV files (Excel) + one JSON file (machine-readable)."""
     import json
     import zipfile
-    from .models import AuditLog, SnapshotLine
+    from .models import AuditLog, SnapshotLine, WorkNote
     out = io.BytesIO()
+    notes = list((await s.execute(select(WorkNote).where(WorkNote.user_id == user.id)
+                                  .order_by(WorkNote.day, WorkNote.id))).scalars())
     accs = await accounts(s, user, include_archived=True)
     cats = await categories(s, user)
     snaps = await snapshot_history(s, user)
@@ -834,6 +836,9 @@ async def backup_zip(s: AsyncSession, user: User) -> bytes:
         z.writestr("edit_history.csv", to_csv(["at", "action", "transaction_id", "detail", "record"],
                                               [[a.at, a.action, a.transaction_id, a.detail, json.dumps(a.data, ensure_ascii=False)]
                                                for a in audit_rows]))
+        z.writestr("work_notes.csv", to_csv(
+            ["date", "title", "text", "worked", "start", "end", "break_min", "worked_minutes", "color", "pinned"],
+            [[n.day, n.title, n.body, n.worked, n.start, n.end, n.break_min, n.minutes, n.color, n.pinned] for n in notes]))
         z.writestr("backup.json", json.dumps({
             "exported_at": str(local_today(user)), "base_currency": user.base_currency, "timezone": user.timezone,
             "accounts": [{"id": a.id, "name": a.name, "type": a.type, "currency": a.currency,

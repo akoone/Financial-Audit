@@ -888,7 +888,7 @@ async def cb_wipe(cb: CallbackQuery, s, user):
         return
     from sqlalchemy import delete as sql_delete
     from .models import (Account, AiInsight, AssetValuation, AuditLog, Category, CategoryRule, Receipt,
-                         ReceiptItem as RI, Snapshot, SnapshotLine)
+                         ReceiptItem as RI, Snapshot, SnapshotLine, WorkNote)
     rec_ids = select(Receipt.id).where(Receipt.user_id == user.id)
     acc_ids = select(Account.id).where(Account.user_id == user.id)
     snap_ids = select(Snapshot.id).where(Snapshot.user_id == user.id)
@@ -903,6 +903,7 @@ async def cb_wipe(cb: CallbackQuery, s, user):
                  sql_delete(CategoryRule).where(CategoryRule.user_id == user.id),
                  sql_delete(Category).where(Category.user_id == user.id),
                  sql_delete(ReportSchedule).where(ReportSchedule.user_id == user.id),
+                 sql_delete(WorkNote).where(WorkNote.user_id == user.id),
                  sql_delete(AiInsight).where(AiInsight.user_id == user.id),
                  sql_delete(User).where(User.id == user.id)):
         await s.execute(stmt)

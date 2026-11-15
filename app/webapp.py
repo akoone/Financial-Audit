@@ -32,7 +32,7 @@ from . import ai, db, fx, importers, ocr, services as sv
 from .config import get_settings
 from .models import (
     ACCOUNT_TYPES, LIABILITY_TYPES, VALUED_TYPES, Account, AuditLog, Category, CategoryRule, ReceiptItem,
-    ReportSchedule, Transaction, User,
+    NOTE_COLORS, ReportSchedule, Transaction, User, WorkNote,
 )
 from .categories import FALLBACK
 from .parser import MULTIPLIERS, parse_amount
@@ -656,6 +656,107 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
         await s.delete(cat)
         await s.commit()
         return {"ok": True, "moved": moved, "to": target.name}
+
+    # ---------- work notes (a notes app with working days) ----------
+    def note_json(n: WorkNote) -> dict:
+        return {"id": n.id, "day": str(n.day), "title": n.title, "body": n.body, "color": n.color, "pinned": n.pinned,
+                "worked": n.worked, "start": n.start, "end": n.end, "break_min": n.break_min, "minutes": n.minutes,
+                "updated": n.updated_at.isoformat() if n.updated_at else None}
+
+    def _hhmm(v) -> str:
+        v = str(v or "").strip()
+        if not v:
+            return ""
+        m = re.fullmatch(r"(\d{1,2}):(\d{2})", v)
+        if not m or int(m[1]) > 23 or int(m[2]) > 59:
+            raise HTTPException(422, "Times look like 09:00 or 18:30")
+        return f"{int(m[1]):02d}:{m[2]}"
+
+    def _apply_note(n: WorkNote, body: dict, today: date):
+        if "day" in body:
+            n.day = parse_day(body["day"], today)
+        if "title" in body:
+            n.title = str(body["title"] or "").strip()[:120]
+        if "body" in body:
+            n.body = str(body["body"] or "")[:20000]
+        if "color" in body:
+            if body["color"] not in NOTE_COLORS:
+                raise HTTPException(422, "Unknown color")
+            n.color = body["color"]
+        for k in ("pinned", "worked"):
+            if k in body:
+                setattr(n, k, bool(body[k]))
+        for k in ("start", "end"):
+            if k in body:
+                setattr(n, k, _hhmm(body[k]))
+        if "break_min" in body:
+            try:
+                n.break_min = max(0, min(24 * 60, int(body["break_min"] or 0)))
+            except (TypeError, ValueError):
+                raise HTTPException(422, "Break is a number of minutes")
+
+    async def _note(s, user, note_id) -> WorkNote:
+        n = await s.get(WorkNote, note_id)
+        if n is None or n.user_id != user.id:
+            raise HTTPException(404, "Note not found")
+        return n
+
+    @app.get("/api/notes")
+    async def list_notes(month: str = "", q: str = "", ctx: Ctx = Depends(get_ctx)):
+        """Notes of one month (newest day first, pinned on top), or a search across all notes."""
+        s, user = ctx.s, ctx.need()
+        today = sv.local_today(user)
+        try:
+            m_start = date.fromisoformat(month + "-01") if month else today.replace(day=1)
+        except ValueError:
+            raise HTTPException(422, "Month looks like 2026-11")
+        m_end = (m_start.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+        cond = [WorkNote.user_id == user.id]
+        q = q.strip()
+        if q:
+            like = f"%{q}%"
+            cond.append(or_(WorkNote.title.ilike(like), WorkNote.body.ilike(like)))
+        else:
+            cond.append(WorkNote.day.between(m_start, m_end))
+        rows = (await s.execute(select(WorkNote).where(*cond).order_by(
+            WorkNote.pinned.desc(), WorkNote.day.desc(), WorkNote.id.desc()).limit(500))).scalars().all()
+        month_rows = rows if not q else (await s.execute(select(WorkNote).where(
+            WorkNote.user_id == user.id, WorkNote.day.between(m_start, m_end)))).scalars().all()
+        worked_days = sorted({str(n.day) for n in month_rows if n.worked})
+        return {"month": f"{m_start:%Y-%m}", "today": str(today), "items": [note_json(n) for n in rows],
+                "days": sorted({str(n.day) for n in month_rows}), "worked_days": worked_days,
+                "summary": {"worked_days": len(worked_days), "minutes": sum(n.minutes for n in month_rows),
+                            "notes": len(month_rows)}}
+
+    @app.post("/api/notes")
+    async def add_note(body: dict = Body(...), ctx: Ctx = Depends(get_ctx)):
+        s, user = ctx.s, ctx.need()
+        today = sv.local_today(user)
+        n = WorkNote(user_id=user.id, day=today, title="", body="", color="", pinned=False, worked=False,
+                     start="", end="", break_min=0)
+        _apply_note(n, body, today)
+        if not (n.title or n.body.strip() or n.worked):
+            raise HTTPException(422, "Write something first")
+        s.add(n)
+        await s.commit()
+        await s.refresh(n)
+        return note_json(n)
+
+    @app.patch("/api/notes/{note_id}")
+    async def edit_note(note_id: int, body: dict = Body(...), ctx: Ctx = Depends(get_ctx)):
+        s, user = ctx.s, ctx.need()
+        n = await _note(s, user, note_id)
+        _apply_note(n, body, sv.local_today(user))
+        await s.commit()
+        await s.refresh(n)
+        return note_json(n)
+
+    @app.delete("/api/notes/{note_id}")
+    async def delete_note(note_id: int, ctx: Ctx = Depends(get_ctx)):
+        s, user = ctx.s, ctx.need()
+        await s.delete(await _note(s, user, note_id))
+        await s.commit()
+        return {"ok": True}
 
     # ---------- personal debts (kept apart from net worth) ----------
     async def _debt(s, user, account_id) -> Account:

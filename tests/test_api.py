@@ -390,3 +390,23 @@ async def test_local_today(s, monkeypatch):
     assert str(sv.local_today(u)) == "2026-11-07"
     u.timezone = "Not/AZone"
     assert sv.local_today(u)  # falls back instead of failing
+
+
+async def test_work_notes(client, s):
+    await client.post("/api/setup", json={"currency": "USD", "timezone": "UTC"})
+    assert (await client.post("/api/notes", json={"title": " "})).status_code == 422
+    r = await client.post("/api/notes", json={"title": "Night shift", "body": "Warehouse", "worked": True,
+                                               "start": "22:00", "end": "6:30", "break_min": 30, "color": "yellow"})
+    n = r.json()
+    assert n["minutes"] == 8 * 60 and n["end"] == "06:30"
+    await client.post("/api/notes", json={"title": "Idea", "body": "buy shoes", "pinned": True})
+    assert (await client.post("/api/notes", json={"title": "x", "start": "25:00"})).status_code == 422
+    lst = (await client.get("/api/notes")).json()
+    assert lst["items"][0]["title"] == "Idea"  # pinned first
+    assert lst["summary"] == {"worked_days": 1, "minutes": 480, "notes": 2}
+    found = (await client.get("/api/notes", params={"q": "warehouse"})).json()["items"]
+    assert [x["title"] for x in found] == ["Night shift"]
+    r = await client.patch(f"/api/notes/{n['id']}", json={"worked": False})
+    assert r.json()["minutes"] == 0
+    assert (await client.delete(f"/api/notes/{n['id']}")).json()["ok"]
+    assert len((await client.get("/api/notes")).json()["items"]) == 1

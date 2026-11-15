@@ -149,6 +149,39 @@
     --accent: var(--fb-btn); --accent-text: var(--fb-btn-text); --sep: var(--fb-sep); --head: var(--fb-hint); --danger: var(--fb-danger);
   }
   .tile { cursor: pointer; }
+  /* work notes */
+  .nt-yellow { --nc: #f2c200; } .nt-green { --nc: #2fb66d; } .nt-blue { --nc: #2a78d6; } .nt-pink { --nc: #e8508a; }
+  .nt-purple { --nc: #8e5bd6; } .nt-orange { --nc: #f08a24; } .nt-gray { --nc: #8a8a8a; }
+  .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; text-align: center; }
+  .cal .wd { font-size: 11px; color: var(--hint); padding-bottom: 2px; }
+  .cal button { position: relative; aspect-ratio: 1 / 0.86; border: 0; border-radius: 10px; background: none; color: var(--text); font: inherit; font-size: 14px; padding: 0; }
+  .cal button.out { visibility: hidden; }
+  .cal button.today { box-shadow: inset 0 0 0 1.5px var(--accent); }
+  .cal button.worked { background: color-mix(in srgb, var(--accent) 18%, transparent); font-weight: 650; }
+  .cal button.sel { background: var(--accent); color: var(--accent-text); }
+  .cal button i { position: absolute; left: 50%; bottom: 5px; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: var(--hint); }
+  .cal button.sel i { background: var(--accent-text); }
+  .nt-sum { display: flex; gap: 8px; margin-top: 10px; }
+  .nt-sum > div { flex: 1; background: var(--soft); border-radius: 12px; padding: 8px 10px; }
+  .nt-sum b { display: block; font-size: 17px; }
+  .nt-sum span { font-size: 12px; color: var(--hint); }
+  .notes-grid { columns: 2; column-gap: 10px; margin-top: 10px; }
+  .wnote { display: block; width: 100%; break-inside: avoid; margin: 0 0 10px; padding: 12px; border: 0; border-radius: 16px; text-align: left; font: inherit; color: var(--text);
+    background: color-mix(in srgb, var(--nc, transparent) 20%, var(--card)); border-top: 4px solid var(--nc, var(--sep)); }
+  .wnote .nt-t { font-weight: 650; font-size: 15px; word-break: break-word; }
+  .wnote .nt-b { font-size: 13px; color: var(--ink-2); margin-top: 4px; white-space: pre-line; word-break: break-word;
+    display: -webkit-box; -webkit-line-clamp: 7; -webkit-box-orient: vertical; overflow: hidden; }
+  .wnote .nt-f { display: flex; justify-content: space-between; gap: 6px; margin-top: 8px; font-size: 11px; color: var(--hint); }
+  .wnote .nt-h { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); border-radius: 999px; padding: 1px 7px; font-weight: 600; }
+  .fab { position: fixed; right: 18px; bottom: calc(84px + var(--safe-b)); z-index: 19; width: 54px; height: 54px; border-radius: 18px; border: 0;
+    background: var(--accent); color: var(--accent-text); font-size: 30px; line-height: 1; box-shadow: 0 6px 18px rgba(0, 0, 0, .22); }
+  .ne-title { width: 100%; border: 0; background: none; color: var(--text); font: inherit; font-size: 20px; font-weight: 650; padding: 6px 2px; outline: none; }
+  .ne-body { width: 100%; min-height: 180px; border: 0; background: none; color: var(--text); font: inherit; font-size: 15px; line-height: 1.5; padding: 4px 2px; resize: none; outline: none; }
+  .ne-colors { display: flex; gap: 10px; flex-wrap: wrap; }
+  .ne-colors button { width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--sep); background: var(--nc, var(--card)); padding: 0; }
+  .ne-colors button.on { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--accent); }
+  .ne-work { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin-top: 10px; }
+  .ne-work label { font-size: 13px; color: var(--hint); display: flex; align-items: center; gap: 6px; }
   .name-card { --gold: #b38b2d; position: relative; display: block; width: 100%; margin: 2px 0 14px; padding: 18px; border-radius: 20px;
     font: inherit; color: inherit; text-align: center; background: var(--card); border: 1.5px solid var(--gold); overflow: hidden; }
   :root[data-theme="dark"] .name-card { --gold: #d4af37; }
@@ -305,11 +338,13 @@
 <section class="view" id="v-accounts" hidden></section>
 <section class="view" id="v-more" hidden></section>
 <section class="view" id="v-debts" hidden></section>
+<section class="view" id="v-notes" hidden></section>
 
 <nav class="tabbar" id="tabbar" hidden>
   <button type="button" data-view="home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 9.8V20h13V9.8"/></svg>Overview</button>
   <button type="button" data-view="history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></svg>History</button>
   <button type="button" data-view="add" class="plus" aria-label="Add"><span class="circle"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></span>Add</button>
+  <button type="button" data-view="notes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h10l4 4v12H5z"/><path d="M15 4v4h4M8.5 12.5l2 2 4-4.5"/></svg>Notes</button>
   <button type="button" data-view="accounts"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M16 14.5h2"/></svg>Accounts</button>
   <button type="button" data-view="more"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h9l3 3v13H6z"/><path d="M9 11h6M9 15h6"/></svg>Statement</button>
 </nav>
@@ -472,7 +507,121 @@ function show(view) {
   updateBack();
   $$("#tabbar button").forEach(b => { if (view === "debts" && b.dataset.view === "accounts") b.classList.add("on"); });
   if (view === "home") pickName();
-  ({home: renderHome, history: renderHistory, add: renderAdd, accounts: renderAccounts, more: renderMore, debts: renderDebts})[view]();
+  ({home: renderHome, history: renderHistory, add: renderAdd, accounts: renderAccounts, more: renderMore, debts: renderDebts, notes: renderNotes})[view]();
+}
+
+// ---------- work notes ----------
+const NOTE_COLORS = ["", "yellow", "green", "blue", "pink", "purple", "orange", "gray"];
+const hm = mins => mins ? `${Math.floor(mins / 60)}h${mins % 60 ? " " + (mins % 60) + "m" : ""}` : "";
+function noteMinutes(worked, start, end, brk) {
+  if (!worked || !start || !end) return 0;
+  const [a, b] = start.split(":").map(Number), [c, d] = end.split(":").map(Number);
+  let m = c * 60 + d - (a * 60 + b);
+  if (m <= 0) m += 1440;
+  return Math.max(0, m - (+brk || 0));
+}
+function timeSel(key, value) {
+  const [hh, mm] = (value || "").split(":");
+  const mins = [...new Set([...Array.from({length: 12}, (_, i) => String(i * 5).padStart(2, "0")), ...(mm ? [mm] : [])])].sort();
+  return `<span class="time24"><select data-t="${key}h" aria-label="${key} hour"><option value="">--</option>${Array.from({length: 24}, (_, i) => String(i).padStart(2, "0")).map(h => `<option ${h === hh ? "selected" : ""}>${h}</option>`).join("")}</select>:<select data-t="${key}m" aria-label="${key} minutes">${mins.map(x => `<option ${x === (mm || "00") ? "selected" : ""}>${x}</option>`).join("")}</select></span>`;
+}
+async function renderNotes() {
+  const el = $("#v-notes");
+  if (!S.notes) S.notes = {month: serverToday().slice(0, 7), q: "", day: null, data: null};
+  const N = S.notes;
+  const key = `${N.month}|${N.q}`;
+  if (!N.data || N.dataKey !== key) {
+    if (!N.data) el.innerHTML = `<div class="empty">Loading…</div>`;
+    try { N.data = await api(`/api/notes?month=${N.month}` + (N.q ? `&q=${encodeURIComponent(N.q)}` : "")); N.dataKey = key; }
+    catch (e) { el.innerHTML = errorCard(e.message); return; }
+    if (S.view !== "notes") return;
+  }
+  const d = N.data, first = parseD(N.month + "-01");
+  const daysIn = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+  const lead = (first.getDay() + 6) % 7;  // weeks start on Monday
+  const has = new Set(d.days), worked = new Set(d.worked_days);
+  const cells = [...Array(lead).fill(null), ...Array.from({length: daysIn}, (_, i) => `${N.month}-${String(i + 1).padStart(2, "0")}`)];
+  const items = N.day && !N.q ? d.items.filter(n => n.day === N.day) : d.items;
+  const monthName = first.toLocaleDateString(undefined, {month: "long", year: "numeric"});
+  const sm = d.summary;
+  el.innerHTML = `
+    <div class="monthnav" style="margin-top:0"><button type="button" id="nt-prev" aria-label="Previous month">‹</button>
+      <b>${esc(monthName)}</b><button type="button" id="nt-next" aria-label="Next month">›</button></div>
+    <div class="card">
+      <div class="cal">${["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map(w => `<div class="wd">${w}</div>`).join("")}
+        ${cells.map(c => c ? `<button type="button" data-day="${c}" class="${worked.has(c) ? "worked" : ""} ${c === d.today ? "today" : ""} ${c === N.day ? "sel" : ""}"
+          aria-label="${esc(shortDay(c))}${worked.has(c) ? ", worked" : ""}">${+c.slice(8)}${has.has(c) ? "<i></i>" : ""}</button>` : `<button class="out" tabindex="-1"></button>`).join("")}</div>
+      <div class="nt-sum"><div><b>${sm.worked_days}</b><span>working days</span></div><div><b>${hm(sm.minutes) || "0h"}</b><span>hours worked</span></div><div><b>${sm.notes}</b><span>notes</span></div></div>
+    </div>
+    <input class="inp" id="nt-q" type="search" placeholder="Search all notes" value="${esc(N.q)}" style="margin-top:12px" autocomplete="off">
+    ${N.day && !N.q ? `<div class="label-row" style="margin:12px 4px 0;display:flex;justify-content:space-between"><b>${esc(shortDay(N.day))}</b><button class="link" id="nt-all">Show whole month</button></div>` : ""}
+    ${N.q ? `<div class="muted small" style="margin:10px 4px 0">${items.length} found for “${esc(N.q)}”</div>` : ""}
+    ${items.length ? `<div class="notes-grid">${items.map(n => `<button type="button" class="wnote ${n.color ? "nt-" + n.color : ""}" data-note="${n.id}">
+        ${n.title ? `<div class="nt-t">${n.pinned ? "📌 " : ""}${esc(n.title)}</div>` : n.pinned ? `<div class="nt-t">📌</div>` : ""}
+        ${n.body ? `<div class="nt-b">${esc(n.body)}</div>` : ""}
+        <div class="nt-f"><span>${esc(shortDay(n.day))}</span>${n.worked ? `<span class="nt-h">${n.minutes ? hm(n.minutes) : "Worked"}</span>` : ""}</div></button>`).join("")}</div>`
+      : `<div class="empty"><div class="big">📝</div>${N.q ? "No notes match." : N.day ? "Nothing on this day yet." : "No notes this month yet."}<br>Tap <b>＋</b> to write one.</div>`}
+    <div style="height:70px"></div>
+    <button type="button" class="fab" id="nt-add" aria-label="New note">＋</button>`;
+  const shift = k => { const t = new Date(first.getFullYear(), first.getMonth() + k, 1); N.month = iso(t).slice(0, 7); N.day = null; renderNotes(); };
+  $("#nt-prev", el).onclick = () => shift(-1);
+  $("#nt-next", el).onclick = () => shift(1);
+  $$(".cal [data-day]", el).forEach(b => b.onclick = () => { N.day = N.day === b.dataset.day ? null : b.dataset.day; haptic("light"); renderNotes(); });
+  const all = $("#nt-all", el); if (all) all.onclick = () => { N.day = null; renderNotes(); };
+  let qt;
+  $("#nt-q", el).oninput = e => { clearTimeout(qt); qt = setTimeout(() => { N.q = e.target.value.trim(); renderNotes().then(() => { const q = $("#nt-q"); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }); }, 350); };
+  $("#nt-add", el).onclick = () => openNote(null, N.day || d.today);
+  $$("[data-note]", el).forEach(b => b.onclick = () => openNote(d.items.find(n => n.id === +b.dataset.note)));
+}
+function notesChanged() { if (S.notes) S.notes.data = null; if (S.view === "notes") renderNotes(); }
+function openNote(n, day) {
+  const isNew = !n;
+  n = n || {title: "", body: "", color: "", pinned: false, worked: false, start: "", end: "", break_min: 0, day};
+  let color = n.color, pinned = n.pinned;
+  openSheet(`
+    <div class="btn-row" style="align-items:center;gap:8px">
+      <input class="inp" type="date" id="ne-day" value="${n.day}" style="flex:1">
+      <button type="button" class="chip" id="ne-pin" aria-pressed="${pinned}">${pinned ? "📌 Pinned" : "📌 Pin"}</button>
+    </div>
+    <input class="ne-title" id="ne-title" placeholder="Title" value="${esc(n.title)}" maxlength="120">
+    <textarea class="ne-body" id="ne-body" placeholder="Write your note…">${esc(n.body)}</textarea>
+    <div class="card">
+      <div class="switch-row"><div class="grow">Working day<div class="sub">Counts toward days and hours worked</div></div>
+        <label class="switch"><input type="checkbox" id="ne-worked" ${n.worked ? "checked" : ""} aria-label="Working day"><span></span></label></div>
+      <div class="ne-work" id="ne-times" ${n.worked ? "" : "hidden"}>
+        <label>Start ${timeSel("s", n.start)}</label><label>End ${timeSel("e", n.end)}</label>
+        <label>Break <input class="inp" id="ne-break" inputmode="numeric" value="${n.break_min || ""}" placeholder="0" style="width:64px;padding:6px 8px"> min</label>
+        <b id="ne-total" style="margin-left:auto"></b></div>
+    </div>
+    <div class="ne-colors" style="margin:14px 2px">${NOTE_COLORS.map(c => `<button type="button" data-c="${c}" class="${c ? "nt-" + c : ""} ${c === color ? "on" : ""}" aria-label="${c || "No"} color"></button>`).join("")}</div>
+    <button class="btn" id="ne-save">Save</button>
+    ${isNew ? "" : `<button class="btn danger" id="ne-del" style="margin-top:8px">Delete note</button>`}`, root => {
+    const body = $("#ne-body", root);
+    const grow = () => { body.style.height = "auto"; body.style.height = Math.max(180, body.scrollHeight) + "px"; };
+    body.oninput = grow; grow();
+    const t = k => { const h = $(`[data-t=${k}h]`, root).value; return h ? `${h}:${$(`[data-t=${k}m]`, root).value}` : ""; };
+    const total = () => { const m = noteMinutes($("#ne-worked", root).checked, t("s"), t("e"), $("#ne-break", root).value);
+      $("#ne-total", root).textContent = m ? `= ${hm(m)}` : ""; };
+    $$("#ne-times select, #ne-break", root).forEach(x => x.oninput = x.onchange = total); total();
+    $("#ne-worked", root).onchange = e => { $("#ne-times", root).hidden = !e.target.checked; total(); };
+    $("#ne-pin", root).onclick = e => { pinned = !pinned; e.target.textContent = pinned ? "📌 Pinned" : "📌 Pin"; e.target.setAttribute("aria-pressed", pinned); };
+    $$("[data-c]", root).forEach(b => b.onclick = () => { color = b.dataset.c; $$("[data-c]", root).forEach(x => x.classList.toggle("on", x === b)); });
+    if (isNew) setTimeout(() => $("#ne-title", root).focus(), 250);
+    $("#ne-save", root).onclick = async () => {
+      const payload = {day: $("#ne-day", root).value || day, title: $("#ne-title", root).value, body: body.value, color, pinned,
+                       worked: $("#ne-worked", root).checked, start: t("s"), end: t("e"), break_min: $("#ne-break", root).value || 0};
+      try {
+        await api(isNew ? "/api/notes" : `/api/notes/${n.id}`, {method: isNew ? "POST" : "PATCH", body: payload});
+        haptic("success"); closeSheet(); toast(isNew ? "Note saved" : "Note updated"); notesChanged();
+      } catch (e) { toast(e.message); }
+    };
+    const del = $("#ne-del", root);
+    if (del) del.onclick = async () => {
+      if (!await confirmAsk("Delete this note?")) return;
+      try { await api(`/api/notes/${n.id}`, {method: "DELETE"}); closeSheet(); toast("Note deleted"); notesChanged(); }
+      catch (e) { toast(e.message); }
+    };
+  });
 }
 
 // ---------- 99 Names of Allah: a random one at the top of the Overview ----------
