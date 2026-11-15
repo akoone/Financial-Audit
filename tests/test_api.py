@@ -435,6 +435,14 @@ async def test_work_notes(client, s):
     assert off["paid_on"] is None and off["income_tx_id"] is None
     inc = (await client.get("/api/transactions", params={"type": "income"})).json()["items"]
     assert not any("Aziz aka" in x["note"] for x in inc)
+    # archiving hides it from the list but keeps it in the month's totals
+    before = (await client.get("/api/notes", params={"month": "2026-11"})).json()["summary"]["worked_days"]
+    await client.patch(f"/api/notes/{aziz['id']}", json={"archived": True})
+    lst = (await client.get("/api/notes", params={"month": "2026-11"})).json()
+    assert all(x["id"] != aziz["id"] for x in lst["items"]) and lst["archived_count"] == 1
+    assert lst["summary"]["worked_days"] == before
+    arch = (await client.get("/api/notes", params={"month": "2026-11", "archived": "true"})).json()["items"]
+    assert [x["id"] for x in arch] == [aziz["id"]]
     await client.delete(f"/api/notes/{aziz['id']}")
     r = await client.patch(f"/api/notes/{n['id']}", json={"worked": False})
     assert r.json()["minutes"] == 0

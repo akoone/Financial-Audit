@@ -103,6 +103,12 @@
   .sw-btn.del { background: var(--bad); }
   .sw-btn.arch { background: #8e8e93; }
   .sw-btn.ok { background: var(--accent); color: var(--accent-text); }
+  .sw-btn.edit { background: var(--accent); color: var(--accent-text); }
+  .sw > .wrow, .sw > .wnote { position: relative; z-index: 1; transition: transform .2s ease; touch-action: pan-y; margin: 0; }
+  .sw > .wrow { background: var(--card); border-top: 0; }
+  .notes-grid .sw { break-inside: avoid; margin: 0 0 10px; border-radius: 16px; }
+  .notes-grid .sw .sw-acts { border-radius: 16px; overflow: hidden; }
+  .notes-grid .sw > .wnote { background: color-mix(in srgb, var(--nc, var(--card)) 20%, var(--card)); }
   .debt-tile { padding: 12px 14px !important; text-align: left; background: var(--card) !important; border-radius: 14px; }
   .entry-sub { font-size: 12px; color: var(--hint); }
   .time24 { display: inline-flex; align-items: center; gap: 2px; font-variant-numeric: tabular-nums; }
@@ -167,7 +173,7 @@
   .nt-sum span { font-size: 12px; color: var(--hint); }
   .notes-grid { columns: 2; column-gap: 10px; margin-top: 10px; }
   .wnote { display: block; width: 100%; break-inside: avoid; margin: 0 0 10px; padding: 12px; border: 0; border-radius: 16px; text-align: left; font: inherit; color: var(--text);
-    background: color-mix(in srgb, var(--nc, transparent) 20%, var(--card)); border-top: 4px solid var(--nc, var(--sep)); }
+    background: color-mix(in srgb, var(--nc, var(--card)) 20%, var(--card)); border-top: 4px solid var(--nc, var(--sep)); }
   .wnote .nt-t { font-weight: 650; font-size: 15px; word-break: break-word; }
   .wnote .nt-b { font-size: 13px; color: var(--ink-2); margin-top: 4px; white-space: pre-line; word-break: break-word;
     display: -webkit-box; -webkit-line-clamp: 7; -webkit-box-orient: vertical; overflow: hidden; }
@@ -551,12 +557,12 @@ async function renderNotes() {
   const el = $("#v-notes");
   if (!S.notes) S.notes = {month: serverToday().slice(0, 7), q: "", day: null, client: null, data: null};
   const N = S.notes;
-  const key = `${N.month}|${N.q}|${N.client}`;
+  const key = `${N.month}|${N.q}|${N.client}|${!!N.arch}`;
   if (!N.data || N.dataKey !== key) {
     if (!N.data) el.innerHTML = `<div class="empty">Loading…</div>`;
     try {
       N.data = await api(`/api/notes?month=${N.month}` + (N.q ? `&q=${encodeURIComponent(N.q)}` : "")
-                        + (N.client !== null ? `&client=${encodeURIComponent(N.client)}` : ""));
+                        + (N.client !== null ? `&client=${encodeURIComponent(N.client)}` : "") + (N.arch ? "&archived=true" : ""));
       N.dataKey = key;
     } catch (e) { el.innerHTML = errorCard(e.message); return; }
     if (S.view !== "notes") return;
@@ -606,7 +612,9 @@ async function renderNotes() {
         ${n.title ? `<div class="nt-t">${n.pinned ? "📌 " : ""}${esc(n.title)}</div>` : n.pinned ? `<div class="nt-t">📌</div>` : ""}
         ${n.body ? `<div class="nt-b">${esc(n.body)}</div>` : ""}
         <div class="nt-f"><span>${esc(shortDay(n.day))}</span>${n.client && N.client === null ? `<span>👤 ${esc(n.client)}</span>` : ""}</div></button>`).join("")}</div>` : ""}
-    ${items.length ? "" : `<div class="empty"><div class="big">📝</div>${N.q ? "No notes match." : N.day ? "Nothing on this day yet." : "Nothing this month yet."}<br>Tap <b>＋</b> to add a working day or a note.</div>`}
+    ${N.arch ? `<div class="banner" style="margin-top:12px"><div class="grow">🗄 <b>Archived</b> entries. They still count in the totals. Swipe left to restore or delete.</div><button class="btn" id="nt-arch-off">Back</button></div>` : ""}
+    ${items.length ? "" : `<div class="empty"><div class="big">${N.arch ? "🗄" : "📝"}</div>${N.arch ? "Nothing archived this month." : N.q ? "No notes match." : N.day ? "Nothing on this day yet." : "Nothing this month yet."}<br>Tap <b>＋</b> to add a working day or a note.</div>`}
+    ${!N.arch && d.archived_count ? `<button type="button" class="link" id="nt-arch" style="display:block;margin:14px auto 0">🗄 Archived (${d.archived_count})</button>` : ""}
     <div style="height:70px"></div>
     <button type="button" class="fab" id="nt-add" aria-label="New working day or note">＋</button>`;
   const shift = k => { const t = new Date(first.getFullYear(), first.getMonth() + k, 1); N.month = iso(t).slice(0, 7); N.day = null; renderNotes(); };
@@ -620,6 +628,27 @@ async function renderNotes() {
   let qt;
   $("#nt-q", el).oninput = e => { clearTimeout(qt); qt = setTimeout(() => { N.q = e.target.value.trim(); renderNotes().then(() => { const q = $("#nt-q"); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }); }, 350); };
   $("#nt-add", el).onclick = () => openNote(null, N.day || d.today);
+  const ao = $("#nt-arch", el); if (ao) ao.onclick = () => { N.arch = true; window.scrollTo(0, 0); renderNotes(); };
+  const af = $("#nt-arch-off", el); if (af) af.onclick = () => { N.arch = false; renderNotes(); };
+  const noteActs = row => {
+    const n = d.items.find(x => x.id === +row.dataset.note);
+    if (!n) return [];
+    const patch = async (body, msg) => {
+      try { await api(`/api/notes/${n.id}`, {method: "PATCH", body}); haptic("light"); notesChanged();
+            toast(msg, {label: "Undo", run: async () => { await api(`/api/notes/${n.id}`, {method: "PATCH", body: {archived: !body.archived}}); notesChanged(); }}); }
+      catch (e) { toast(e.message); }
+    };
+    return [
+      N.arch ? {label: "Restore", icon: "↩️", cls: "ok", run: () => patch({archived: false}, "Restored")}
+             : {label: "Edit", icon: "✏️", cls: "edit", run: () => openNote(n)},
+      ...(N.arch ? [] : [{label: "Archive", icon: "🗄", cls: "arch", run: () => patch({archived: true}, "Archived")}]),
+      {label: "Delete", icon: "🗑", run: async () => {
+        if (!await confirmAsk(n.paid && n.income_tx_id ? "Delete this day? Its income entry is removed too." : "Delete this entry?")) return;
+        try { await api(`/api/notes/${n.id}`, {method: "DELETE"}); toast("Deleted"); notesChanged(); } catch (e) { toast(e.message); }
+      }}];
+  };
+  swipeRows(el, ".wlist > .wrow", noteActs);
+  swipeRows(el, ".notes-grid > .wnote", noteActs, {compact: true});
   $$("[data-note]", el).forEach(b => b.onclick = e => { if (e.target.closest("[data-tick]")) return; openNote(d.items.find(n => n.id === +b.dataset.note)); });
   $$("[data-tick]", el).forEach(b => b.onclick = async () => {
     const n = d.items.find(x => x.id === +b.dataset.tick), paid = !n.paid;
@@ -717,7 +746,8 @@ function openNote(n, day) {
     </div>
     <div class="ne-colors" style="margin:14px 2px">${NOTE_COLORS.map(c => `<button type="button" data-c="${c}" class="${c ? "nt-" + c : ""} ${c === color ? "on" : ""}" aria-label="${c || "No"} color"></button>`).join("")}</div>
     <button class="btn" id="ne-save">Save</button>
-    ${isNew ? "" : `<button class="btn danger" id="ne-del" style="margin-top:8px">Delete</button>`}`, root => {
+    ${isNew ? "" : `<button class="btn secondary" id="ne-arch" style="margin-top:8px">${n.archived ? "Restore from archive" : "🗄 Archive"}</button>
+      <button class="btn danger" id="ne-del" style="margin-top:8px">Delete</button>`}`, root => {
     const body = $("#ne-body", root);
     const grow = () => { body.style.height = "auto"; body.style.height = Math.max(110, body.scrollHeight) + "px"; };
     body.oninput = grow; grow();
@@ -753,6 +783,11 @@ function openNote(n, day) {
         await api(isNew ? "/api/notes" : `/api/notes/${n.id}`, {method: isNew ? "POST" : "PATCH", body: payload});
         haptic("success"); closeSheet(); toast(isNew ? "Saved" : "Updated"); notesChanged();
       } catch (e) { toast(e.message); }
+    };
+    const arch = $("#ne-arch", root);
+    if (arch) arch.onclick = async () => {
+      try { await api(`/api/notes/${n.id}`, {method: "PATCH", body: {archived: !n.archived}}); closeSheet(); toast(n.archived ? "Restored" : "Archived"); notesChanged(); }
+      catch (e) { toast(e.message); }
     };
     const del = $("#ne-del", root);
     if (del) del.onclick = async () => {
@@ -1087,7 +1122,7 @@ new MutationObserver(list => {  // values filled in by the app (receipt scan, "A
 function closeSwipes(except) {
   $$(".sw.open").forEach(w => { if (w !== except) { w.classList.remove("open"); w.lastElementChild.style.transform = ""; } });
 }
-function swipeRows(container, selector, actionsFor) {
+function swipeRows(container, selector, actionsFor, opts = {}) {
   $$(selector, container).forEach(row => {
     if (row.parentNode.classList.contains("sw")) return;
     const acts = actionsFor(row);
@@ -1095,14 +1130,17 @@ function swipeRows(container, selector, actionsFor) {
     const wrap = document.createElement("div"); wrap.className = "sw";
     row.parentNode.insertBefore(wrap, row);
     const back = document.createElement("div"); back.className = "sw-acts";
+    const bw = opts.compact ? 52 : acts.length > 2 ? 72 : 84;
     for (const a of acts) {
       const b = document.createElement("button");
-      b.type = "button"; b.className = "sw-btn " + (a.cls || "del"); b.textContent = a.label;
+      b.type = "button"; b.className = "sw-btn " + (a.cls || "del"); b.textContent = opts.compact && a.icon ? a.icon : a.label;
+      b.setAttribute("aria-label", a.label);
+      b.style.width = bw + "px";
       b.onclick = e => { e.stopPropagation(); closeSwipes(); a.run(); };
       back.appendChild(b);
     }
     wrap.appendChild(back); wrap.appendChild(row);
-    const W = 84 * acts.length;
+    const W = bw * acts.length;
     let x0 = null, y0 = 0, dx = 0, drag = false, swiped = false;
     row.addEventListener("touchstart", e => { const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; drag = false; row.style.transition = "none"; }, {passive: true});
     row.addEventListener("touchmove", e => {
@@ -1141,7 +1179,8 @@ async function deleteTx(id, after) {
   try { await api(`/api/transactions/${id}`, {method: "DELETE"}); haptic("success"); toast("Deleted"); await afterChange(); if (after) after(); else show(S.view); }
   catch (e) { toast(e.message); }
 }
-const txSwipe = after => row => [{label: "Delete", run: () => deleteTx(+row.dataset.tx, after)}];
+const txSwipe = after => row => [{label: "Edit", cls: "edit", run: () => openTx(+row.dataset.tx)},
+                                  {label: "Delete", run: () => deleteTx(+row.dataset.tx, after)}];
 
 function txRow(t) {
   const c = baseCur();
@@ -1536,7 +1575,7 @@ function renderAccounts() {
   $("#go-debts", el).onclick = () => show("debts");
   swipeRows(el, ".card.list > [data-a]", row => {
     const a = accById(+row.dataset.a);
-    return a ? [{label: "Archive", cls: "arch", run: async () => {
+    return a ? [{label: "Edit", cls: "edit", run: () => openAccount(a.id)}, {label: "Archive", cls: "arch", run: async () => {
       if (!await confirmAsk(`Archive ${a.name}? Its entries are kept; you can restore it from Archived.`, "Archive")) return;
       try { await api(`/api/accounts/${a.id}`, {method: "PATCH", body: {archived: true}}); toast("Archived"); await afterChange(); S.add = null; renderAccounts(); }
       catch (e) { toast(e.message); }
@@ -1632,8 +1671,10 @@ function openCategories(kind = "expense") {
       $$("[data-c]", root).forEach(b => b.onclick = () => editCategory(+b.dataset.c, kind, null, draw));
       swipeRows(root, "[data-c]", row => {
         const c = cats.find(x => x.id === +row.dataset.c);
-        if (!c || c.name === FALLBACK_CAT[kind]) return [];
-        return [{label: "Delete", run: async () => {
+        if (!c) return [];
+        const editAct = {label: "Edit", cls: "edit", run: () => editCategory(c.id, kind, null, draw)};
+        if (c.name === FALLBACK_CAT[kind]) return [editAct];
+        return [editAct, {label: "Delete", run: async () => {
           if (!await confirmAsk(`Delete ${c.name}? Its entries move to ${FALLBACK_CAT[kind]}.`)) return;
           try { const r = await api(`/api/categories/${c.id}`, {method: "DELETE"}); toast(r.moved ? `Deleted. ${r.moved} entries moved to ${r.to}` : "Category deleted"); await refreshMe(); catsChanged(); draw(); }
           catch (e) { toast(e.message); }
@@ -1723,7 +1764,7 @@ function renderDebts() {
   $$("[data-d]", el).forEach(b => b.onclick = () => openDebt(+b.dataset.d));
   swipeRows(el, "[data-d]", row => {
     const id = +row.dataset.d, a = m.accounts.find(x => x.id === id) || (m.archived || []).find(x => x.id === id);
-    return a ? [{label: "Delete", run: async () => {
+    return a ? [{label: "Edit", cls: "edit", run: () => openDebt(id)}, {label: "Delete", run: async () => {
       if (!await confirmAsk(`Delete the debt with ${a.name} and all its entries? Use this for a debt added by mistake. It stays in the change log.`)) return;
       try { await api(`/api/debts/${id}`, {method: "DELETE"}); haptic("success"); toast("Debt deleted"); await debtsChanged(); }
       catch (e) { toast(e.message); }
@@ -1827,7 +1868,8 @@ async function openDebt(id) {
     $("#dd-edit", root).onclick = () => editDebt(d);
     $("#dd-more", root).onclick = () => openNewDebt(owesMe ? "lent" : "borrowed", d.name);
     $$("[data-e]", root).forEach(b => b.onclick = () => editDebtEntry(d, d.entries.find(x => x.id === +b.dataset.e)));
-    swipeRows(root, "[data-e]", row => [{label: "Delete", run: async () => {
+    swipeRows(root, "[data-e]", row => [{label: "Edit", cls: "edit", run: () => editDebtEntry(d, d.entries.find(x => x.id === +row.dataset.e))},
+                                        {label: "Delete", run: async () => {
       if (!await confirmAsk("Delete this entry? It stays in the change log.")) return;
       try { await api(`/api/debts/${d.id}/entries/${row.dataset.e}`, {method: "DELETE"}); toast("Entry deleted"); await debtsChanged(); openDebt(d.id); }
       catch (e) { toast(e.message); }

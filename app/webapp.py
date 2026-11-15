@@ -660,6 +660,7 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
     # ---------- work notes (a notes app with working days) ----------
     def note_json(n: WorkNote) -> dict:
         return {"id": n.id, "day": str(n.day), "title": n.title, "body": n.body, "color": n.color, "pinned": n.pinned,
+                "archived": bool(n.archived),
                 "worked": n.worked, "start": n.start, "end": n.end, "break_min": n.break_min, "minutes": n.minutes,
                 "client": n.client or "", "address": n.address or "", "paid": bool(n.paid), "paid_on": str(n.paid_on) if n.paid_on else None,
                 "pay": _f(n.pay or 0), "income_tx_id": n.income_tx_id,
@@ -687,7 +688,7 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
             if body["color"] not in NOTE_COLORS:
                 raise HTTPException(422, "Unknown color")
             n.color = body["color"]
-        for k in ("pinned", "worked"):
+        for k in ("pinned", "worked", "archived"):
             if k in body:
                 setattr(n, k, bool(body[k]))
         for k in ("start", "end"):
@@ -752,7 +753,8 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
         return n
 
     @app.get("/api/notes")
-    async def list_notes(month: str = "", q: str = "", client: str | None = None, ctx: Ctx = Depends(get_ctx)):
+    async def list_notes(month: str = "", q: str = "", client: str | None = None, archived: bool = False,
+                         ctx: Ctx = Depends(get_ctx)):
         """Notes of one month (newest day first, pinned on top), or a search across all notes."""
         s, user = ctx.s, ctx.need()
         today = sv.local_today(user)
@@ -771,10 +773,14 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
                             WorkNote.client.ilike(like)))
         else:
             cond.append(WorkNote.day.between(m_start, m_end))
-        rows = (await s.execute(select(WorkNote).where(*cond).order_by(
+        rows = (await s.execute(select(WorkNote).where(
+            *cond, func.coalesce(WorkNote.archived, False).is_(archived)).order_by(
             WorkNote.pinned.desc(), WorkNote.day.desc(), WorkNote.id.desc()).limit(500))).scalars().all()
-        month_rows = rows if not q else (await s.execute(select(WorkNote).where(
+        # totals and the calendar count every entry of the month, archived or not
+        month_rows = (await s.execute(select(WorkNote).where(
             *cond[:-1], WorkNote.day.between(m_start, m_end)))).scalars().all()
+        archived_count = (await s.execute(select(func.count(WorkNote.id)).where(
+            *cond, func.coalesce(WorkNote.archived, False).is_(True)))).scalar() or 0
         clients = sorted({c for c in (await s.execute(select(WorkNote.client).where(
             WorkNote.user_id == user.id).distinct())).scalars() if c}, key=str.lower)
         work = [n for n in month_rows if n.worked]
@@ -789,7 +795,7 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
         worked_days = sorted({str(n.day) for n in month_rows if n.worked})
         return {"month": f"{m_start:%Y-%m}", "today": str(today), "items": [note_json(n) for n in rows],
                 "days": sorted({str(n.day) for n in month_rows}), "worked_days": worked_days,
-                "clients": clients, "rates": rates, "addresses": addresses, "currency": user.base_currency,
+                "clients": clients, "rates": rates, "addresses": addresses, "archived_count": archived_count, "currency": user.base_currency,
                 "summary": {"worked_days": len(worked_days), "minutes": sum(n.minutes for n in month_rows),
                             "notes": len(month_rows),
                             "unpaid_days": len({n.day for n in work if not n.paid}),
@@ -826,7 +832,7 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
         s, user = ctx.s, ctx.need()
         today = sv.local_today(user)
         n = WorkNote(user_id=user.id, day=today, title="", body="", color="", pinned=False, worked=False,
-                     start="", end="", break_min=0, client="", address="", paid=False, pay=Decimal(0),
+                     start="", end="", break_min=0, client="", address="", paid=False, pay=Decimal(0), archived=False,
                      extra_minutes=0, extra_pay=Decimal(0), extra_note="")
         _apply_note(n, body, today)
         if not (n.title or n.body.strip() or n.worked):

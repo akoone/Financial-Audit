@@ -214,6 +214,7 @@ class WorkNote(Base):
     body: Mapped[str] = mapped_column(Text, default="")
     color: Mapped[str] = mapped_column(String(12), default="")
     pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)  # hidden from the lists, still counted
     worked: Mapped[bool] = mapped_column(Boolean, default=False)  # counts as a working day
     start: Mapped[str] = mapped_column(String(5), default="")  # HH:MM
     end: Mapped[str] = mapped_column(String(5), default="")
