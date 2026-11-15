@@ -218,20 +218,35 @@ class WorkNote(Base):
     start: Mapped[str] = mapped_column(String(5), default="")  # HH:MM
     end: Mapped[str] = mapped_column(String(5), default="")
     break_min: Mapped[int] = mapped_column(Integer, default=0)
+    client: Mapped[str] = mapped_column(String(60), default="")  # who the work was for; keeps lists apart
+    paid: Mapped[bool] = mapped_column(Boolean, default=False)  # ticked: money for this day was received
+    paid_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    pay: Mapped[Decimal] = mapped_column(Money, default=0)  # what the day earns, in the base currency
+    income_tx_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # income entry made when paid
+    # extra work on the same day: overtime hours or a leftover job finished, paid on top
+    extra_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    extra_pay: Mapped[Decimal] = mapped_column(Money, default=0)
+    extra_note: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
     @property
     def minutes(self) -> int:
         """Worked minutes from start/end (an end before the start means past midnight), minus the break."""
+        extra = int(self.extra_minutes or 0) if self.worked else 0
         if not (self.worked and self.start and self.end):
-            return 0
+            return extra
         h1, m1 = map(int, self.start.split(":"))
         h2, m2 = map(int, self.end.split(":"))
         mins = (h2 * 60 + m2) - (h1 * 60 + m1)
         if mins <= 0:
             mins += 24 * 60
-        return max(0, mins - (self.break_min or 0))
+        return max(0, mins - (self.break_min or 0)) + extra
+
+    @property
+    def total_pay(self) -> Decimal:
+        """Day pay plus pay for extra work."""
+        return Decimal(str(self.pay or 0)) + Decimal(str(self.extra_pay or 0))
 
 
 class AuditLog(Base):

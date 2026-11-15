@@ -354,6 +354,8 @@ async def send_report(bot: Bot, s, user: User, kind: str, chat_id: int | None = 
     markup = InlineKeyboardMarkup(inline_keyboard=[[btn]]) if btn else None
     if rep.chart:
         await bot.send_photo(chat_id, BufferedInputFile(rep.chart, "report.png"))
+    if rep.work_chart:
+        await bot.send_photo(chat_id, BufferedInputFile(rep.work_chart, "work.png"))
     for i in range(0, len(rep.text), 4000):
         chunk = rep.text[i:i + 4000]
         await bot.send_message(chat_id, chunk, reply_markup=markup if i + 4000 >= len(rep.text) else None)

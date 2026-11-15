@@ -661,6 +661,10 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
     def note_json(n: WorkNote) -> dict:
         return {"id": n.id, "day": str(n.day), "title": n.title, "body": n.body, "color": n.color, "pinned": n.pinned,
                 "worked": n.worked, "start": n.start, "end": n.end, "break_min": n.break_min, "minutes": n.minutes,
+                "client": n.client or "", "paid": bool(n.paid), "paid_on": str(n.paid_on) if n.paid_on else None,
+                "pay": _f(n.pay or 0), "income_tx_id": n.income_tx_id,
+                "extra_minutes": n.extra_minutes or 0, "extra_pay": _f(n.extra_pay or 0), "extra_note": n.extra_note or "",
+                "total_pay": _f(n.total_pay),
                 "updated": n.updated_at.isoformat() if n.updated_at else None}
 
     def _hhmm(v) -> str:
@@ -689,11 +693,55 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
         for k in ("start", "end"):
             if k in body:
                 setattr(n, k, _hhmm(body[k]))
+        if "pay" in body:
+            raw = body["pay"]
+            n.pay = abs(parse_number(raw)) if raw not in (None, "", 0, "0") else Decimal(0)
+        if "extra_pay" in body:
+            raw = body["extra_pay"]
+            n.extra_pay = abs(parse_number(raw)) if raw not in (None, "", 0, "0") else Decimal(0)
+        if "extra_hours" in body:  # hours, e.g. 2 or 1.5
+            try:
+                n.extra_minutes = max(0, min(24 * 60, round(float(str(body["extra_hours"] or 0).replace(",", ".")) * 60)))
+            except ValueError:
+                raise HTTPException(422, "Extra hours is a number, like 2 or 1.5")
+        if "extra_note" in body:
+            n.extra_note = str(body["extra_note"] or "").strip()[:200]
+        if "client" in body:
+            n.client = " ".join(str(body["client"] or "").split())[:60]
+        if "paid" in body:
+            n.paid = bool(body["paid"])
+            if not n.paid:
+                n.paid_on = None
+            elif not n.paid_on:
+                n.paid_on = today
+        if body.get("paid_on") and n.paid:
+            n.paid_on = parse_day(body["paid_on"], today)
         if "break_min" in body:
             try:
                 n.break_min = max(0, min(24 * 60, int(body["break_min"] or 0)))
             except (TypeError, ValueError):
                 raise HTTPException(422, "Break is a number of minutes")
+
+    async def _sync_income(s, user, n: WorkNote):
+        """A paid working day with a pay amount shows up as income on its pay date; unticking removes it."""
+        want = bool(n.worked and n.paid and n.total_pay > 0)
+        tx = await s.get(Transaction, n.income_tx_id) if n.income_tx_id else None
+        if tx is not None and tx.user_id != user.id:
+            tx = None
+        if tx is not None and (not want or Decimal(str(tx.amount)) != n.total_pay or tx.occurred_on != n.paid_on):
+            await sv.delete_transaction(s, user, tx.id)
+            tx = None
+        if want and tx is None:
+            acc = await sv.find_account(s, user, None)
+            if acc is None:
+                accs = [a for a in await sv.accounts(s, user) if a.type not in sv.DEBT_ACCOUNT_TYPES]
+                acc = accs[0] if accs else None
+            if acc is not None:
+                cat, _ = await sv.guess_category(s, user, "salary", "income")
+                label = " · ".join(x for x in ("Work", n.client, f"{n.day:%d %b}") if x)
+                tx = await sv.add_transaction(s, user, acc, "income", n.total_pay, user.base_currency, cat,
+                                              note=label, on=n.paid_on or sv.local_today(user), created_via="app")
+        n.income_tx_id = tx.id if tx is not None else None
 
     async def _note(s, user, note_id) -> WorkNote:
         n = await s.get(WorkNote, note_id)
@@ -702,7 +750,7 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
         return n
 
     @app.get("/api/notes")
-    async def list_notes(month: str = "", q: str = "", ctx: Ctx = Depends(get_ctx)):
+    async def list_notes(month: str = "", q: str = "", client: str | None = None, ctx: Ctx = Depends(get_ctx)):
         """Notes of one month (newest day first, pinned on top), or a search across all notes."""
         s, user = ctx.s, ctx.need()
         today = sv.local_today(user)
@@ -712,6 +760,8 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
             raise HTTPException(422, "Month looks like 2026-11")
         m_end = (m_start.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
         cond = [WorkNote.user_id == user.id]
+        if client is not None:  # one person's list ("" = notes not tied to anyone)
+            cond.append(func.coalesce(WorkNote.client, "") == client.strip())
         q = q.strip()
         if q:
             like = f"%{q}%"
@@ -721,23 +771,62 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
         rows = (await s.execute(select(WorkNote).where(*cond).order_by(
             WorkNote.pinned.desc(), WorkNote.day.desc(), WorkNote.id.desc()).limit(500))).scalars().all()
         month_rows = rows if not q else (await s.execute(select(WorkNote).where(
-            WorkNote.user_id == user.id, WorkNote.day.between(m_start, m_end)))).scalars().all()
+            *cond[:-1], WorkNote.day.between(m_start, m_end)))).scalars().all()
+        clients = sorted({c for c in (await s.execute(select(WorkNote.client).where(
+            WorkNote.user_id == user.id).distinct())).scalars() if c}, key=str.lower)
+        work = [n for n in month_rows if n.worked]
+        rate_rows = (await s.execute(select(WorkNote.client, WorkNote.pay).where(
+            WorkNote.user_id == user.id, WorkNote.worked.is_(True), WorkNote.pay > 0)
+            .order_by(WorkNote.day, WorkNote.id))).all()
+        rates = {c or "": _f(p) for c, p in rate_rows}  # last day pay used for each person
         worked_days = sorted({str(n.day) for n in month_rows if n.worked})
         return {"month": f"{m_start:%Y-%m}", "today": str(today), "items": [note_json(n) for n in rows],
                 "days": sorted({str(n.day) for n in month_rows}), "worked_days": worked_days,
+                "clients": clients, "rates": rates, "currency": user.base_currency,
                 "summary": {"worked_days": len(worked_days), "minutes": sum(n.minutes for n in month_rows),
-                            "notes": len(month_rows)}}
+                            "notes": len(month_rows),
+                            "unpaid_days": len({n.day for n in work if not n.paid}),
+                            "unpaid_minutes": sum(n.minutes for n in work if not n.paid),
+                            "paid_days": len({n.day for n in work if n.paid}),
+                            "earned": _f(sum((n.total_pay for n in work), Decimal(0))),
+                            "extra_pay": _f(sum((Decimal(str(n.extra_pay or 0)) for n in work), Decimal(0))),
+                            "waiting_pay": _f(sum((n.total_pay for n in work if not n.paid), Decimal(0))),
+                            "received_pay": _f(sum((n.total_pay for n in work if n.paid), Decimal(0)))}}
+
+    @app.get("/api/notes/stats")
+    async def notes_stats(period: str = "week", client: str | None = None, ctx: Ctx = Depends(get_ctx)):
+        """Work stats for this week or month so far, compared with the one before."""
+        s, user = ctx.s, ctx.need()
+        if period not in ("week", "month"):
+            period = "week"
+        start, end, pstart, pend = sv.period_bounds(period, sv.local_today(user))
+        if period == "week":
+            end = start + timedelta(days=6)  # the whole week, so the chart shows Mon–Sun
+        cl = client.strip() if client is not None else None
+        cur = await sv.work_stats(s, user, start, end, cl)
+        prev = await sv.work_stats(s, user, pstart, pend, cl)
+        return {"period": period, "start": str(start), "end": str(end),
+                **{k: cur[k] for k in ("days", "minutes", "waiting_days", "waiting_minutes", "paid_days", "received")},
+                "by_client": [{**c, "earned": _f(c["earned"]), "waiting_pay": _f(c["waiting_pay"])} for c in cur["by_client"]],
+                "earned": _f(cur["earned"]), "waiting_pay": _f(cur["waiting_pay"]), "received_pay": _f(cur["received_pay"]),
+                "extra_pay": _f(cur["extra_pay"]), "extra_minutes": cur["extra_minutes"],
+                "currency": user.base_currency,
+                "daily": [{"date": str(d), "minutes": m, "pay": _f(cur["daily_pay"][d])} for d, m in cur["daily"].items()],
+                "prev": {"days": prev["days"], "minutes": prev["minutes"], "earned": _f(prev["earned"])}}
 
     @app.post("/api/notes")
     async def add_note(body: dict = Body(...), ctx: Ctx = Depends(get_ctx)):
         s, user = ctx.s, ctx.need()
         today = sv.local_today(user)
         n = WorkNote(user_id=user.id, day=today, title="", body="", color="", pinned=False, worked=False,
-                     start="", end="", break_min=0)
+                     start="", end="", break_min=0, client="", paid=False, pay=Decimal(0),
+                     extra_minutes=0, extra_pay=Decimal(0), extra_note="")
         _apply_note(n, body, today)
         if not (n.title or n.body.strip() or n.worked):
             raise HTTPException(422, "Write something first")
         s.add(n)
+        await s.flush()
+        await _sync_income(s, user, n)
         await s.commit()
         await s.refresh(n)
         return note_json(n)
@@ -747,6 +836,7 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
         s, user = ctx.s, ctx.need()
         n = await _note(s, user, note_id)
         _apply_note(n, body, sv.local_today(user))
+        await _sync_income(s, user, n)
         await s.commit()
         await s.refresh(n)
         return note_json(n)
@@ -754,7 +844,10 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
     @app.delete("/api/notes/{note_id}")
     async def delete_note(note_id: int, ctx: Ctx = Depends(get_ctx)):
         s, user = ctx.s, ctx.need()
-        await s.delete(await _note(s, user, note_id))
+        n = await _note(s, user, note_id)
+        n.paid = False
+        await _sync_income(s, user, n)  # its income entry goes too
+        await s.delete(n)
         await s.commit()
         return {"ok": True}
 

@@ -9,7 +9,7 @@ from datetime import date, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import ai, services as sv
-from .charts import report_chart
+from .charts import report_chart, work_chart
 from .models import AiInsight, User
 
 log = logging.getLogger(__name__)
@@ -20,6 +20,7 @@ LABELS = {"day": "Daily", "week": "Weekly", "month": "Monthly", "year": "Yearly"
 class Report:
     text: str
     chart: bytes | None
+    work_chart: bytes | None = None
 
 
 def _pct_change(cur, prev) -> str:
@@ -65,6 +66,30 @@ async def build_report(s: AsyncSession, user: User, kind: str, today: date | Non
     if kind == "month":
         nw = await sv.net_worth(s, user)
         lines += ["", f"🏦 Net worth: <b>{sv.fmt(nw.net, c)}</b>"]
+    work = None
+    if kind in ("week", "month"):
+        work = await sv.work_stats(s, user, start, end)
+        if work["days"]:
+            pw = await sv.work_stats(s, user, pstart, pend)
+            ch = work["minutes"] - pw["minutes"]
+            dd = lambda k: f"{k} day" + ("" if k == 1 else "s")
+            lines += ["", f"<b>🛠 Work {'this week' if kind == 'week' else 'this month'}</b>",
+                      f"Days worked: <b>{work['days']}</b> · hours: <b>{sv.fmt_hours(work['minutes'])}</b>"
+                      + (f" ({'+' if ch >= 0 else '−'}{sv.fmt_hours(abs(ch))} vs previous)" if pw["minutes"] else ""),
+                      f"⏳ Waiting for pay: <b>{dd(work['waiting_days'])}</b>"
+                      + (f" = <b>{sv.fmt(work['waiting_pay'], c)}</b>" if work["waiting_pay"] else "")
+                      + f" · 💰 paid: <b>{dd(work['paid_days'])}</b>"
+                      + (f" = <b>{sv.fmt(work['received_pay'], c)}</b>" if work["received_pay"] else "")]
+            if work["earned"]:
+                lines.append(f"Earned by working: <b>{sv.fmt(work['earned'], c)}</b>"
+                             + (f" (extra work {sv.fmt(work['extra_pay'], c)})" if work["extra_pay"] else ""))
+            elif work["extra_minutes"]:
+                lines.append(f"Extra hours: {sv.fmt_hours(work['extra_minutes'])}")
+            for cl in work["by_client"][:6]:
+                lines.append(f"• {html.escape(cl['client'] or 'No person')}: {dd(cl['days'])}"
+                             + (f", {sv.fmt_hours(cl['minutes'])}" if cl["minutes"] else "")
+                             + (f", {sv.fmt(cl['earned'], c)}" if cl["earned"] else "")
+                             + (f" ({dd(cl['waiting_days'])} waiting)" if cl["waiting_days"] else ""))
     if cur["count"] == 0:
         lines += ["", "No transactions logged in this period. Send something like <code>12 coffee</code>."]
 
@@ -100,4 +125,5 @@ async def build_report(s: AsyncSession, user: User, kind: str, today: date | Non
     what = {"day": "today" if end == sv.local_today(user) else f"on {end:%d %b}", "week": "this week",
             "month": f"in {start:%B}"}.get(kind, "")
     chart = report_chart(cur, f"{label} · {period}", mtd=mtd, prev_mtd=prev_mtd, compare=compare, what=what)
-    return Report("\n".join(lines), chart)
+    wchart = work_chart(work, f"Work · {period}") if work and work["days"] else None
+    return Report("\n".join(lines), chart, wchart)

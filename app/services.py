@@ -611,6 +611,56 @@ async def stats(s: AsyncSession, user: User, start: date, end: date) -> dict:
     }
 
 
+async def work_stats(s: AsyncSession, user: User, start: date, end: date, client: str | None = None) -> dict:
+    """Working days in [start, end] from work notes: days, hours, paid / waiting, per person, per day."""
+    from .models import WorkNote
+    cond = [WorkNote.user_id == user.id, WorkNote.worked.is_(True), WorkNote.day.between(start, end)]
+    if client is not None:
+        cond.append(func.coalesce(WorkNote.client, "") == client)
+    rows = (await s.execute(select(WorkNote).where(*cond))).scalars().all()
+    days = (end - start).days + 1
+    daily = {start + timedelta(days=i): 0 for i in range(days)}
+    daily_pay = {d: Decimal(0) for d in daily}
+    per: dict[str, dict] = {}
+    for n in rows:
+        pay = n.total_pay
+        daily[n.day] += n.minutes
+        daily_pay[n.day] += pay
+        c = per.setdefault(n.client or "", {"client": n.client or "", "days": set(), "minutes": 0, "waiting": set(),
+                                            "earned": Decimal(0), "waiting_pay": Decimal(0)})
+        c["days"].add(n.day)
+        c["minutes"] += n.minutes
+        c["earned"] += pay
+        if not n.paid:
+            c["waiting"].add(n.day)
+            c["waiting_pay"] += pay
+    received = (await s.execute(select(func.count(WorkNote.id)).where(
+        WorkNote.user_id == user.id, WorkNote.paid.is_(True), WorkNote.paid_on.between(start, end),
+        *([func.coalesce(WorkNote.client, "") == client] if client is not None else [])))).scalar() or 0
+    return {
+        "start": start, "end": end,
+        "days": len({n.day for n in rows}), "minutes": sum(n.minutes for n in rows),
+        "waiting_days": len({n.day for n in rows if not n.paid}),
+        "waiting_minutes": sum(n.minutes for n in rows if not n.paid),
+        "paid_days": len({n.day for n in rows if n.paid}), "received": received,
+        "daily": daily, "daily_pay": daily_pay,
+        "earned": sum((n.total_pay for n in rows), Decimal(0)),
+        "extra_pay": sum((Decimal(str(n.extra_pay or 0)) for n in rows), Decimal(0)),
+        "extra_minutes": sum(int(n.extra_minutes or 0) for n in rows),
+        "waiting_pay": sum((n.total_pay for n in rows if not n.paid), Decimal(0)),
+        "received_pay": sum((n.total_pay for n in rows if n.paid), Decimal(0)),
+        "by_client": sorted(({"client": c["client"], "days": len(c["days"]), "minutes": c["minutes"],
+                              "waiting_days": len(c["waiting"]), "earned": c["earned"], "waiting_pay": c["waiting_pay"]}
+                             for c in per.values()),
+                            key=lambda x: (-x["days"], -x["minutes"])),
+    }
+
+
+def fmt_hours(minutes: int) -> str:
+    h, m = divmod(int(minutes), 60)
+    return f"{h}h {m:02d}m" if m else f"{h}h"
+
+
 async def other_moves(s: AsyncSession, user: User, start: date, end: date) -> dict:
     """Money that moved in [start, end] without being spending or income (base currency)."""
     rows = (await s.execute(select(Transaction).where(
@@ -837,8 +887,12 @@ async def backup_zip(s: AsyncSession, user: User) -> bytes:
                                               [[a.at, a.action, a.transaction_id, a.detail, json.dumps(a.data, ensure_ascii=False)]
                                                for a in audit_rows]))
         z.writestr("work_notes.csv", to_csv(
-            ["date", "title", "text", "worked", "start", "end", "break_min", "worked_minutes", "color", "pinned"],
-            [[n.day, n.title, n.body, n.worked, n.start, n.end, n.break_min, n.minutes, n.color, n.pinned] for n in notes]))
+            ["date", "worked_for", "title", "text", "worked", "start", "end", "break_min", "worked_minutes",
+             f"day_pay_{user.base_currency}", "extra_minutes", f"extra_pay_{user.base_currency}", "extra_note",
+             f"total_pay_{user.base_currency}", "paid", "paid_on", "color", "pinned"],
+            [[n.day, n.client, n.title, n.body, n.worked, n.start, n.end, n.break_min, n.minutes,
+              n.pay, n.extra_minutes, n.extra_pay, n.extra_note, n.total_pay,
+              n.paid, n.paid_on or "", n.color, n.pinned] for n in notes]))
         z.writestr("backup.json", json.dumps({
             "exported_at": str(local_today(user)), "base_currency": user.base_currency, "timezone": user.timezone,
             "accounts": [{"id": a.id, "name": a.name, "type": a.type, "currency": a.currency,

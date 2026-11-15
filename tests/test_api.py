@@ -403,9 +403,35 @@ async def test_work_notes(client, s):
     assert (await client.post("/api/notes", json={"title": "x", "start": "25:00"})).status_code == 422
     lst = (await client.get("/api/notes")).json()
     assert lst["items"][0]["title"] == "Idea"  # pinned first
-    assert lst["summary"] == {"worked_days": 1, "minutes": 480, "notes": 2}
+    assert lst["summary"] == {"worked_days": 1, "minutes": 480, "notes": 2, "unpaid_days": 1, "unpaid_minutes": 480, "paid_days": 0, "earned": 0, "extra_pay": 0, "waiting_pay": 0, "received_pay": 0}
     found = (await client.get("/api/notes", params={"q": "warehouse"})).json()["items"]
     assert [x["title"] for x in found] == ["Night shift"]
+    # work for different people stays apart; ticking it as paid records the date
+    r = await client.post("/api/notes", json={"title": "Tiling", "worked": True, "client": " Aziz  aka ", "day": "2026-11-03"})
+    aziz = r.json()
+    assert aziz["client"] == "Aziz aka" and aziz["paid"] is False
+    r = await client.patch(f"/api/notes/{aziz['id']}", json={"paid": True})
+    assert r.json()["paid"] is True and r.json()["paid_on"]
+    lst = (await client.get("/api/notes", params={"month": "2026-11", "client": "Aziz aka"})).json()
+    assert [x["title"] for x in lst["items"]] == ["Tiling"] and lst["clients"] == ["Aziz aka"]
+    assert lst["summary"]["paid_days"] == 1 and lst["summary"]["unpaid_days"] == 0
+    # a day's pay: ticking it paid adds it as income, unticking removes it
+    r = await client.patch(f"/api/notes/{aziz['id']}", json={"pay": "150", "paid": True})
+    assert r.json()["pay"] == 150 and r.json()["income_tx_id"]
+    inc = (await client.get("/api/transactions", params={"type": "income"})).json()["items"]
+    assert any(x["amount"] == 150 and "Aziz aka" in x["note"] for x in inc)
+    # extra work that day: 2 hours, paid 40 on top; the income entry follows the new total
+    r = await client.patch(f"/api/notes/{aziz['id']}", json={"extra_hours": "2", "extra_pay": "40", "extra_note": "finished the bathroom"})
+    assert r.json()["total_pay"] == 190 and r.json()["minutes"] == 120
+    inc = (await client.get("/api/transactions", params={"type": "income"})).json()["items"]
+    assert [x["amount"] for x in inc if "Aziz aka" in x["note"]] == [190]
+    lst = (await client.get("/api/notes", params={"month": "2026-11"})).json()
+    assert lst["rates"]["Aziz aka"] == 150 and lst["summary"]["received_pay"] == 190
+    off = (await client.patch(f"/api/notes/{aziz['id']}", json={"paid": False})).json()
+    assert off["paid_on"] is None and off["income_tx_id"] is None
+    inc = (await client.get("/api/transactions", params={"type": "income"})).json()["items"]
+    assert not any("Aziz aka" in x["note"] for x in inc)
+    await client.delete(f"/api/notes/{aziz['id']}")
     r = await client.patch(f"/api/notes/{n['id']}", json={"worked": False})
     assert r.json()["minutes"] == 0
     assert (await client.delete(f"/api/notes/{n['id']}")).json()["ok"]

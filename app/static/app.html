@@ -173,6 +173,26 @@
     display: -webkit-box; -webkit-line-clamp: 7; -webkit-box-orient: vertical; overflow: hidden; }
   .wnote .nt-f { display: flex; justify-content: space-between; gap: 6px; margin-top: 8px; font-size: 11px; color: var(--hint); }
   .wnote .nt-h { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); border-radius: 999px; padding: 1px 7px; font-weight: 600; }
+  .wlist { padding: 4px 14px; }
+  .wrow { display: flex; align-items: flex-start; gap: 12px; padding: 11px 0; border-top: 1px solid var(--sep); cursor: pointer; }
+  .wrow:first-child { border-top: 0; }
+  .wrow .tick { flex: none; width: 26px; height: 26px; margin-top: 2px; border-radius: 8px; border: 2px solid var(--accent); background: none;
+    color: var(--accent-text); font-size: 16px; font-weight: 800; line-height: 1; padding: 0; }
+  .wrow.paid .tick { background: var(--good); border-color: var(--good); color: #fff; }
+  .wrow .wr-d { font-size: 13px; font-weight: 650; color: var(--accent); }
+  .wrow .wr-t { margin-top: 1px; word-break: break-word; }
+  .wrow .wr-m { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; font-size: 12px; }
+  .wrow .wr-m:empty { display: none; }
+  .wrow .who { background: var(--soft); border-radius: 999px; padding: 1px 8px; color: var(--ink-2); }
+  .wrow .got { color: var(--good); font-weight: 600; }
+  .wrow .xtra { background: color-mix(in srgb, #f08a24 18%, transparent); color: #c26a10; border-radius: 999px; padding: 1px 8px; font-weight: 600; }
+  .ne-extra { margin-top: 10px; padding: 12px; border-radius: 12px; background: var(--soft); }
+  .wrow .wr-pay { flex: none; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .wrow.paid .wr-pay { color: var(--good); }
+  .neg-soft { color: #d98a00; }
+  .seg.mini { display: inline-flex; float: right; padding: 2px; font-size: 12px; font-weight: 500; }
+  .seg.mini button { padding: 4px 10px; }
+  .wrow.paid .wr-d, .wrow.paid .wr-t { text-decoration: line-through; color: var(--hint); }
   .fab { position: fixed; right: 18px; bottom: calc(84px + var(--safe-b)); z-index: 19; width: 54px; height: 54px; border-radius: 18px; border: 0;
     background: var(--accent); color: var(--accent-text); font-size: 30px; line-height: 1; box-shadow: 0 6px 18px rgba(0, 0, 0, .22); }
   .ne-title { width: 100%; border: 0; background: none; color: var(--text); font: inherit; font-size: 20px; font-weight: 650; padding: 6px 2px; outline: none; }
@@ -527,13 +547,16 @@ function timeSel(key, value) {
 }
 async function renderNotes() {
   const el = $("#v-notes");
-  if (!S.notes) S.notes = {month: serverToday().slice(0, 7), q: "", day: null, data: null};
+  if (!S.notes) S.notes = {month: serverToday().slice(0, 7), q: "", day: null, client: null, data: null};
   const N = S.notes;
-  const key = `${N.month}|${N.q}`;
+  const key = `${N.month}|${N.q}|${N.client}`;
   if (!N.data || N.dataKey !== key) {
     if (!N.data) el.innerHTML = `<div class="empty">Loading…</div>`;
-    try { N.data = await api(`/api/notes?month=${N.month}` + (N.q ? `&q=${encodeURIComponent(N.q)}` : "")); N.dataKey = key; }
-    catch (e) { el.innerHTML = errorCard(e.message); return; }
+    try {
+      N.data = await api(`/api/notes?month=${N.month}` + (N.q ? `&q=${encodeURIComponent(N.q)}` : "")
+                        + (N.client !== null ? `&client=${encodeURIComponent(N.client)}` : ""));
+      N.dataKey = key;
+    } catch (e) { el.innerHTML = errorCard(e.message); return; }
     if (S.view !== "notes") return;
   }
   const d = N.data, first = parseD(N.month + "-01");
@@ -542,83 +565,186 @@ async function renderNotes() {
   const has = new Set(d.days), worked = new Set(d.worked_days);
   const cells = [...Array(lead).fill(null), ...Array.from({length: daysIn}, (_, i) => `${N.month}-${String(i + 1).padStart(2, "0")}`)];
   const items = N.day && !N.q ? d.items.filter(n => n.day === N.day) : d.items;
+  const waiting = items.filter(n => n.worked && !n.paid).sort((a, b) => a.day.localeCompare(b.day));
+  const received = items.filter(n => n.worked && n.paid).sort((a, b) => (b.paid_on || "").localeCompare(a.paid_on || "") || b.day.localeCompare(a.day));
+  const notes = items.filter(n => !n.worked);
   const monthName = first.toLocaleDateString(undefined, {month: "long", year: "numeric"});
   const sm = d.summary;
+  const longDay = s => parseD(s).toLocaleDateString(undefined, {weekday: "short", day: "numeric", month: "short"});
+  const workRow = n => `<div class="wrow ${n.paid ? "paid" : ""}" data-note="${n.id}">
+      <button type="button" class="tick" data-tick="${n.id}" role="checkbox" aria-checked="${n.paid}" aria-label="${n.paid ? "Paid, tap to undo" : "Mark as paid"}">${n.paid ? "✓" : ""}</button>
+      <div class="grow"><div class="wr-d">${esc(longDay(n.day))}${n.minutes ? ` · ${hm(n.minutes)}` : ""}${n.start && n.end ? ` <span class="muted">(${n.start}–${n.end})</span>` : ""}</div>
+        <div class="wr-t">${esc(n.title || n.body.split("\n")[0] || "Work day")}</div>
+        <div class="wr-m">${n.client && N.client === null ? `<span class="who">👤 ${esc(n.client)}</span>` : ""}${n.extra_pay || n.extra_minutes ? `<span class="xtra">⏱ Extra${n.extra_minutes ? " " + hm(n.extra_minutes) : ""}${n.extra_pay ? " +" + esc(short(n.extra_pay)) : ""}</span>` : ""}${n.paid ? `<span class="got">💰 Received ${esc(shortDay(n.paid_on))}</span>` : ""}</div></div>
+      ${n.total_pay ? `<div class="wr-pay">${esc(money(n.total_pay, ""))}</div>` : ""}</div>`;
   el.innerHTML = `
+    <div class="chips scroll" id="nt-who" style="margin-bottom:10px">
+      <button type="button" class="chip ${N.client === null ? "on" : ""}" data-who="*">All</button>
+      ${d.clients.map(c => `<button type="button" class="chip ${N.client === c ? "on" : ""}" data-who="${esc(c)}">👤 ${esc(c)}</button>`).join("")}
+      <button type="button" class="chip ${N.client === "" ? "on" : ""}" data-who="">No person</button></div>
     <div class="monthnav" style="margin-top:0"><button type="button" id="nt-prev" aria-label="Previous month">‹</button>
       <b>${esc(monthName)}</b><button type="button" id="nt-next" aria-label="Next month">›</button></div>
     <div class="card">
       <div class="cal">${["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map(w => `<div class="wd">${w}</div>`).join("")}
         ${cells.map(c => c ? `<button type="button" data-day="${c}" class="${worked.has(c) ? "worked" : ""} ${c === d.today ? "today" : ""} ${c === N.day ? "sel" : ""}"
           aria-label="${esc(shortDay(c))}${worked.has(c) ? ", worked" : ""}">${+c.slice(8)}${has.has(c) ? "<i></i>" : ""}</button>` : `<button class="out" tabindex="-1"></button>`).join("")}</div>
-      <div class="nt-sum"><div><b>${sm.worked_days}</b><span>working days</span></div><div><b>${hm(sm.minutes) || "0h"}</b><span>hours worked</span></div><div><b>${sm.notes}</b><span>notes</span></div></div>
+      <div class="nt-sum"><div><b>${sm.worked_days}</b><span>days worked</span></div>
+        <div><b class="neg-soft">${sm.waiting_pay ? esc(short(sm.waiting_pay)) : sm.unpaid_days}</b><span>${sm.waiting_pay ? `waiting · ${sm.unpaid_days} d` : "days waiting"}</span></div>
+        <div><b class="pos">${esc(short(sm.received_pay || 0))}</b><span>received · ${sm.paid_days} d</span></div></div>
     </div>
-    <input class="inp" id="nt-q" type="search" placeholder="Search all notes" value="${esc(N.q)}" style="margin-top:12px" autocomplete="off">
-    ${N.day && !N.q ? `<div class="label-row" style="margin:12px 4px 0;display:flex;justify-content:space-between"><b>${esc(shortDay(N.day))}</b><button class="link" id="nt-all">Show whole month</button></div>` : ""}
+    <div class="card" id="nt-stats"><h3>Work stats <span class="seg mini" id="ws-seg">${["week", "month"].map(k => `<button type="button" data-ws="${k}" class="${(N.ws || "week") === k ? "on" : ""}">${k === "week" ? "Week" : "Month"}</button>`).join("")}</span></h3>
+      <div id="ws-body" class="muted small">Loading…</div></div>
+    <input class="inp" id="nt-q" type="search" placeholder="Search notes" value="${esc(N.q)}" style="margin-top:12px" autocomplete="off">
+    ${N.day && !N.q ? `<div style="margin:12px 4px 0;display:flex;justify-content:space-between"><b>${esc(longDay(N.day))}</b><button class="link" id="nt-all">Show whole month</button></div>` : ""}
     ${N.q ? `<div class="muted small" style="margin:10px 4px 0">${items.length} found for “${esc(N.q)}”</div>` : ""}
-    ${items.length ? `<div class="notes-grid">${items.map(n => `<button type="button" class="wnote ${n.color ? "nt-" + n.color : ""}" data-note="${n.id}">
+    ${waiting.length ? `<div class="section-title">⏳ Waiting for payment · ${waiting.length}</div><div class="card wlist">${waiting.map(workRow).join("")}</div>` : ""}
+    ${received.length ? `<div class="section-title">💰 Received · ${received.length}</div><div class="card wlist">${received.map(workRow).join("")}</div>` : ""}
+    ${notes.length ? `${waiting.length || received.length ? `<div class="section-title">📝 Notes</div>` : ""}<div class="notes-grid">${notes.map(n => `<button type="button" class="wnote ${n.color ? "nt-" + n.color : ""}" data-note="${n.id}">
         ${n.title ? `<div class="nt-t">${n.pinned ? "📌 " : ""}${esc(n.title)}</div>` : n.pinned ? `<div class="nt-t">📌</div>` : ""}
         ${n.body ? `<div class="nt-b">${esc(n.body)}</div>` : ""}
-        <div class="nt-f"><span>${esc(shortDay(n.day))}</span>${n.worked ? `<span class="nt-h">${n.minutes ? hm(n.minutes) : "Worked"}</span>` : ""}</div></button>`).join("")}</div>`
-      : `<div class="empty"><div class="big">📝</div>${N.q ? "No notes match." : N.day ? "Nothing on this day yet." : "No notes this month yet."}<br>Tap <b>＋</b> to write one.</div>`}
+        <div class="nt-f"><span>${esc(shortDay(n.day))}</span>${n.client && N.client === null ? `<span>👤 ${esc(n.client)}</span>` : ""}</div></button>`).join("")}</div>` : ""}
+    ${items.length ? "" : `<div class="empty"><div class="big">📝</div>${N.q ? "No notes match." : N.day ? "Nothing on this day yet." : "Nothing this month yet."}<br>Tap <b>＋</b> to add a working day or a note.</div>`}
     <div style="height:70px"></div>
-    <button type="button" class="fab" id="nt-add" aria-label="New note">＋</button>`;
+    <button type="button" class="fab" id="nt-add" aria-label="New working day or note">＋</button>`;
   const shift = k => { const t = new Date(first.getFullYear(), first.getMonth() + k, 1); N.month = iso(t).slice(0, 7); N.day = null; renderNotes(); };
+  $$("#ws-seg button", el).forEach(b => b.onclick = () => { N.ws = b.dataset.ws; $$("#ws-seg button", el).forEach(x => x.classList.toggle("on", x === b)); haptic("light"); drawWorkStats(el); });
+  drawWorkStats(el);
   $("#nt-prev", el).onclick = () => shift(-1);
   $("#nt-next", el).onclick = () => shift(1);
+  $$("#nt-who .chip", el).forEach(b => b.onclick = () => { N.client = b.dataset.who === "*" ? null : b.dataset.who; N.day = null; haptic("light"); renderNotes(); });
   $$(".cal [data-day]", el).forEach(b => b.onclick = () => { N.day = N.day === b.dataset.day ? null : b.dataset.day; haptic("light"); renderNotes(); });
   const all = $("#nt-all", el); if (all) all.onclick = () => { N.day = null; renderNotes(); };
   let qt;
   $("#nt-q", el).oninput = e => { clearTimeout(qt); qt = setTimeout(() => { N.q = e.target.value.trim(); renderNotes().then(() => { const q = $("#nt-q"); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }); }, 350); };
   $("#nt-add", el).onclick = () => openNote(null, N.day || d.today);
-  $$("[data-note]", el).forEach(b => b.onclick = () => openNote(d.items.find(n => n.id === +b.dataset.note)));
+  $$("[data-note]", el).forEach(b => b.onclick = e => { if (e.target.closest("[data-tick]")) return; openNote(d.items.find(n => n.id === +b.dataset.note)); });
+  $$("[data-tick]", el).forEach(b => b.onclick = async () => {
+    const n = d.items.find(x => x.id === +b.dataset.tick), paid = !n.paid;
+    try {
+      const r = await api(`/api/notes/${n.id}`, {method: "PATCH", body: {paid}});
+      haptic(paid ? "success" : "light");
+      notesChanged();
+      toast(paid ? `Received · ${shortDay(r.paid_on)}${r.income_tx_id ? " · added to income" : ""}` : "Back to waiting for payment",
+            {label: "Undo", run: async () => { await api(`/api/notes/${n.id}`, {method: "PATCH", body: {paid: !paid}}); notesChanged(); }});
+    } catch (e) { toast(e.message); }
+  });
+}
+async function drawWorkStats(el) {
+  const N = S.notes, box = $("#ws-body", el);
+  if (!box) return;
+  let w;
+  try { w = await api(`/api/notes/stats?period=${N.ws || "week"}` + (N.client !== null ? `&client=${encodeURIComponent(N.client)}` : "")); }
+  catch (e) { box.textContent = e.message; return; }
+  if (!document.body.contains(box)) return;
+  const c = w.currency, usePay = w.daily.some(x => x.pay);
+  const dh = w.minutes - w.prev.minutes, de = w.earned - w.prev.earned;
+  const cmp = usePay ? (w.prev.earned ? `${de >= 0 ? "▲" : "▼"} ${short(Math.abs(de))} vs last ${w.period}` : "")
+                     : (w.prev.days ? `${w.days - w.prev.days >= 0 ? "▲" : "▼"} ${Math.abs(w.days - w.prev.days)} days vs last ${w.period}` : "");
+  box.className = "";
+  box.innerHTML = `<div class="muted small">${esc(shortDay(w.start))} – ${esc(shortDay(w.end))}${cmp ? " · " + esc(cmp) : ""}</div>
+    <div class="nt-sum"><div><b>${w.days}</b><span>days${w.minutes ? " · " + hm(w.minutes) : ""}</span></div>
+      <div><b>${esc(short(w.earned))}</b><span>earned</span></div>
+      <div><b class="neg-soft">${esc(short(w.waiting_pay))}</b><span>waiting · ${w.waiting_days} d</span></div></div>
+    ${w.days ? `<div class="chart" id="c-work" style="height:170px;margin-top:6px"></div>` : `<div class="muted small" style="margin-top:8px">No working days yet in this ${w.period}.</div>`}
+    ${w.by_client.length > 1 || (w.by_client[0] && w.by_client[0].client) ? `<div style="margin-top:4px">${w.by_client.map(p => `<div class="kv"><span class="k">👤 ${esc(p.client || "No person")}</span>
+      <span>${p.days} d${p.earned ? " · " + esc(money(p.earned, "")) : ""}${p.waiting_days ? ` <span class="muted">(${p.waiting_days} waiting)</span>` : ""}</span></div>`).join("")}</div>` : ""}`;
+  const node = $("#c-work", box);
+  if (node && window.echarts) {
+    const t = tokens(), ch = echarts.init(node); charts["c-work"] = ch;
+    const vals = w.daily.map(x => usePay ? x.pay : +(x.minutes / 60).toFixed(1));
+    ch.setOption({grid: {left: 6, right: 6, top: 18, bottom: 4, containLabel: true}, animation: false,
+      tooltip: {trigger: "axis", valueFormatter: v => usePay ? money(v, c) : `${v} h`},
+      xAxis: {type: "category", data: w.daily.map(x => w.period === "week" ? parseD(x.date).toLocaleDateString(undefined, {weekday: "short"}) : +x.date.slice(8)),
+              axisLine: {lineStyle: {color: t.axis}}, axisTick: {show: false}, axisLabel: {color: t.hint, fontSize: 10}},
+      yAxis: {type: "value", splitLine: {lineStyle: {color: t.grid}}, axisLabel: {color: t.hint, fontSize: 10, formatter: v => usePay ? short(v) : v + "h"}},
+      series: [{type: "bar", data: vals, barMaxWidth: 26, itemStyle: {color: t.s1, borderRadius: [4, 4, 0, 0]},
+                label: {show: w.period === "week", position: "top", color: t.ink2, fontSize: 10, formatter: p => p.value ? (usePay ? short(p.value) : p.value + "h") : ""}}]});
+  }
 }
 function notesChanged() { if (S.notes) S.notes.data = null; if (S.view === "notes") renderNotes(); }
 function openNote(n, day) {
-  const isNew = !n;
-  n = n || {title: "", body: "", color: "", pinned: false, worked: false, start: "", end: "", break_min: 0, day};
+  const isNew = !n, N = S.notes || {}, clients = (N.data && N.data.clients) || [];
+  const rates = (N.data && N.data.rates) || {}, cur = (N.data && N.data.currency) || baseCur();
+  n = n || {title: "", body: "", color: "", pinned: false, worked: true, start: "", end: "", break_min: 0, day,
+            client: N.client || "", paid: false, paid_on: null, pay: rates[N.client || ""] || 0};
   let color = n.color, pinned = n.pinned;
   openSheet(`
     <div class="btn-row" style="align-items:center;gap:8px">
-      <input class="inp" type="date" id="ne-day" value="${n.day}" style="flex:1">
+      <input class="inp" type="date" id="ne-day" value="${n.day}" style="flex:1" aria-label="Date">
       <button type="button" class="chip" id="ne-pin" aria-pressed="${pinned}">${pinned ? "📌 Pinned" : "📌 Pin"}</button>
     </div>
-    <input class="ne-title" id="ne-title" placeholder="Title" value="${esc(n.title)}" maxlength="120">
-    <textarea class="ne-body" id="ne-body" placeholder="Write your note…">${esc(n.body)}</textarea>
+    <label class="label" for="ne-client" style="margin-top:10px">Worked for (person or company)</label>
+    <input class="inp" id="ne-client" list="ne-clients" value="${esc(n.client)}" placeholder="e.g. Aziz aka" maxlength="60" autocomplete="off">
+    <datalist id="ne-clients">${clients.map(c => `<option value="${esc(c)}">`).join("")}</datalist>
+    ${clients.length ? `<div class="chips scroll" style="margin-top:6px">${clients.map(c => `<button type="button" class="chip" data-pick="${esc(c)}">${esc(c)}</button>`).join("")}</div>` : ""}
+    <input class="ne-title" id="ne-title" placeholder="Title" value="${esc(n.title)}" maxlength="120" style="margin-top:6px">
+    <textarea class="ne-body" id="ne-body" placeholder="Write your note…" style="min-height:110px">${esc(n.body)}</textarea>
     <div class="card">
       <div class="switch-row"><div class="grow">Working day<div class="sub">Counts toward days and hours worked</div></div>
         <label class="switch"><input type="checkbox" id="ne-worked" ${n.worked ? "checked" : ""} aria-label="Working day"><span></span></label></div>
-      <div class="ne-work" id="ne-times" ${n.worked ? "" : "hidden"}>
-        <label>Start ${timeSel("s", n.start)}</label><label>End ${timeSel("e", n.end)}</label>
-        <label>Break <input class="inp" id="ne-break" inputmode="numeric" value="${n.break_min || ""}" placeholder="0" style="width:64px;padding:6px 8px"> min</label>
-        <b id="ne-total" style="margin-left:auto"></b></div>
+      <div id="ne-workbox" ${n.worked ? "" : "hidden"}>
+        <label class="label" for="ne-pay" style="margin:8px 0 4px">Pay for this day (${esc(cur)})</label>
+        <input class="inp" id="ne-pay" inputmode="decimal" value="${n.pay ? n.pay : ""}" placeholder="0" style="background-color:var(--page);font-size:18px;font-weight:600">
+        <button type="button" class="link" id="ne-xbtn" style="margin-top:10px" ${n.extra_pay || n.extra_minutes ? "hidden" : ""}>＋ Extra work this day</button>
+        <div id="ne-extra" class="ne-extra" ${n.extra_pay || n.extra_minutes ? "" : "hidden"}>
+          <div style="font-weight:600;margin-bottom:6px">⏱ Extra work</div>
+          <div class="btn-row" style="gap:8px">
+            <div class="grow"><label class="label" for="ne-xh" style="margin-left:0">Extra hours</label>
+              <input class="inp" id="ne-xh" inputmode="decimal" value="${n.extra_minutes ? +(n.extra_minutes / 60).toFixed(2) : ""}" placeholder="e.g. 2" style="background-color:var(--card)"></div>
+            <div class="grow"><label class="label" for="ne-xp" style="margin-left:0">Extra pay (${esc(cur)})</label>
+              <input class="inp" id="ne-xp" inputmode="decimal" value="${n.extra_pay || ""}" placeholder="0" style="background-color:var(--card)"></div></div>
+          <input class="inp" id="ne-xn" value="${esc(n.extra_note || "")}" placeholder="What was it? e.g. finished the leftover work" maxlength="200" style="margin-top:8px;background-color:var(--card)">
+          <div class="muted small" id="ne-sum" style="margin-top:8px"></div>
+        </div>
+        <div class="muted small" style="margin:10px 0 0">Hours (optional)</div>
+        <div class="ne-work" style="margin-top:6px">
+          <label>Start ${timeSel("s", n.start)}</label><label>End ${timeSel("e", n.end)}</label>
+          <label>Break <input class="inp" id="ne-break" inputmode="numeric" value="${n.break_min || ""}" placeholder="0" style="width:64px;padding:6px 8px"> min</label>
+          <b id="ne-total" style="margin-left:auto"></b></div>
+        <div class="switch-row" style="margin-top:10px"><div class="grow">Paid<div class="sub">Tick when paid · it's added to income</div></div>
+          <label class="switch"><input type="checkbox" id="ne-paid" ${n.paid ? "checked" : ""} aria-label="Paid"><span></span></label></div>
+        <div id="ne-paidbox" ${n.paid ? "" : "hidden"} style="padding-bottom:4px"><label class="label" for="ne-paid-on" style="margin-left:0">Received on</label>
+          <input class="inp" type="date" id="ne-paid-on" value="${n.paid_on || serverToday()}" style="background-color:var(--page)"></div>
+      </div>
     </div>
     <div class="ne-colors" style="margin:14px 2px">${NOTE_COLORS.map(c => `<button type="button" data-c="${c}" class="${c ? "nt-" + c : ""} ${c === color ? "on" : ""}" aria-label="${c || "No"} color"></button>`).join("")}</div>
     <button class="btn" id="ne-save">Save</button>
-    ${isNew ? "" : `<button class="btn danger" id="ne-del" style="margin-top:8px">Delete note</button>`}`, root => {
+    ${isNew ? "" : `<button class="btn danger" id="ne-del" style="margin-top:8px">Delete</button>`}`, root => {
     const body = $("#ne-body", root);
-    const grow = () => { body.style.height = "auto"; body.style.height = Math.max(180, body.scrollHeight) + "px"; };
+    const grow = () => { body.style.height = "auto"; body.style.height = Math.max(110, body.scrollHeight) + "px"; };
     body.oninput = grow; grow();
     const t = k => { const h = $(`[data-t=${k}h]`, root).value; return h ? `${h}:${$(`[data-t=${k}m]`, root).value}` : ""; };
     const total = () => { const m = noteMinutes($("#ne-worked", root).checked, t("s"), t("e"), $("#ne-break", root).value);
       $("#ne-total", root).textContent = m ? `= ${hm(m)}` : ""; };
-    $$("#ne-times select, #ne-break", root).forEach(x => x.oninput = x.onchange = total); total();
-    $("#ne-worked", root).onchange = e => { $("#ne-times", root).hidden = !e.target.checked; total(); };
+    $$("#ne-workbox select, #ne-break", root).forEach(x => x.oninput = x.onchange = total); total();
+    $("#ne-worked", root).onchange = e => { $("#ne-workbox", root).hidden = !e.target.checked; total(); };
+    $("#ne-paid", root).onchange = e => { $("#ne-paidbox", root).hidden = !e.target.checked; };
+    $("#ne-xbtn", root).onclick = e => { e.target.hidden = true; $("#ne-extra", root).hidden = false; $("#ne-xh", root).focus(); };
+    const num = v => parseFloat(String(v || "").replace(/[\s\u00a0]/g, "").replace(",", ".")) || 0;
+    const sum = () => { const a = num($("#ne-pay", root).value), b = num($("#ne-xp", root).value);
+      $("#ne-sum", root).textContent = b ? `Day total: ${money(a + b, cur)}` : ""; };
+    ["#ne-pay", "#ne-xp"].forEach(q => $(q, root).addEventListener("input", sum)); sum();
+    const fillRate = () => { const r = rates[$("#ne-client", root).value.trim()]; const f = $("#ne-pay", root); if (r && !f.value) { f.value = r; f.dispatchEvent(new Event("input", {bubbles: true})); } };
+    $$("[data-pick]", root).forEach(b => b.onclick = () => { $("#ne-client", root).value = b.dataset.pick; fillRate(); });
+    $("#ne-client", root).onchange = fillRate;
     $("#ne-pin", root).onclick = e => { pinned = !pinned; e.target.textContent = pinned ? "📌 Pinned" : "📌 Pin"; e.target.setAttribute("aria-pressed", pinned); };
     $$("[data-c]", root).forEach(b => b.onclick = () => { color = b.dataset.c; $$("[data-c]", root).forEach(x => x.classList.toggle("on", x === b)); });
-    if (isNew) setTimeout(() => $("#ne-title", root).focus(), 250);
     $("#ne-save", root).onclick = async () => {
-      const payload = {day: $("#ne-day", root).value || day, title: $("#ne-title", root).value, body: body.value, color, pinned,
-                       worked: $("#ne-worked", root).checked, start: t("s"), end: t("e"), break_min: $("#ne-break", root).value || 0};
+      const w = $("#ne-worked", root).checked, paid = w && $("#ne-paid", root).checked;
+      const payload = {day: $("#ne-day", root).value || day, client: $("#ne-client", root).value, title: $("#ne-title", root).value,
+                       body: body.value, color, pinned, worked: w, start: t("s"), end: t("e"), break_min: $("#ne-break", root).value || 0,
+                       pay: $("#ne-pay", root).value, extra_hours: $("#ne-xh", root).value, extra_pay: $("#ne-xp", root).value,
+                       extra_note: $("#ne-xn", root).value,
+                       paid, paid_on: paid ? $("#ne-paid-on", root).value : null};
       try {
         await api(isNew ? "/api/notes" : `/api/notes/${n.id}`, {method: isNew ? "POST" : "PATCH", body: payload});
-        haptic("success"); closeSheet(); toast(isNew ? "Note saved" : "Note updated"); notesChanged();
+        haptic("success"); closeSheet(); toast(isNew ? "Saved" : "Updated"); notesChanged();
       } catch (e) { toast(e.message); }
     };
     const del = $("#ne-del", root);
     if (del) del.onclick = async () => {
-      if (!await confirmAsk("Delete this note?")) return;
-      try { await api(`/api/notes/${n.id}`, {method: "DELETE"}); closeSheet(); toast("Note deleted"); notesChanged(); }
+      if (!await confirmAsk("Delete this entry?")) return;
+      try { await api(`/api/notes/${n.id}`, {method: "DELETE"}); closeSheet(); toast("Deleted"); notesChanged(); }
       catch (e) { toast(e.message); }
     };
   });

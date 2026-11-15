@@ -123,6 +123,53 @@ def _bars_categories(ax, cur: dict, prev: dict, cur_label: str, prev_label: str)
     ax.set_title(f"Spending by category: {cur_label} vs {prev_label}", fontsize=11, loc="left")
 
 
+def work_chart(w: dict, title: str) -> bytes | None:
+    """Hours worked per day (bars, paid vs waiting not split) + share of hours by person (pie)."""
+    days = list(w["daily"].keys())
+    by_pay = any(w.get("daily_pay", {}).values())  # paid by the day: show money, otherwise hours
+    hours = [float(w["daily_pay"][d]) for d in days] if by_pay else [m / 60 for m in w["daily"].values()]
+    people = [c for c in w["by_client"] if c["minutes"] or c["days"] or c.get("earned")]
+    fig = plt.figure(figsize=(10, 7.6), dpi=130)
+    gs = fig.add_gridspec(2, 1, height_ratios=[1, 1], hspace=0.42, top=0.9, bottom=0.04)
+    ax = fig.add_subplot(gs[0])
+    ax.bar(range(len(days)), hours, color=SPEND, width=0.7)
+    for i, h in enumerate(hours):
+        if h:
+            ax.text(i, h, _short(h) if by_pay else f"{h:.1f}".rstrip("0").rstrip("."), ha="center", va="bottom", fontsize=8)
+    step = 1 if len(days) <= 10 else 2 if len(days) <= 20 else 3
+    ax.set_xticks(range(0, len(days), step))
+    ax.set_xticklabels([d.strftime("%a %d") if len(days) <= 7 else str(d.day) for d in days][::step], fontsize=8)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.grid(axis="y", color="#e6e6e6", lw=0.8); ax.set_axisbelow(True)
+    h, m = divmod(w["minutes"], 60)
+    if by_pay:
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: _short(v)))
+        ax.set_title(f"Earned per day: {float(w['earned']):,.0f} in {w['days']} day{'s' if w['days'] != 1 else ''}", fontsize=11, loc="left")
+    else:
+        ax.set_title(f"Hours worked per day: {h}h {m:02d}m in {w['days']} days", fontsize=11, loc="left")
+    ax2 = fig.add_subplot(gs[1])
+    vals = [float(c.get("earned") or 0) for c in people] if by_pay else [c["minutes"] / 60 or c["days"] for c in people]
+    if len(people) > 1 or (people and people[0]["client"]):
+        wedges, _t, auto = ax2.pie(vals, colors=PALETTE[:len(vals)], startangle=90, counterclock=False,
+                                   autopct=lambda p: f"{p:.0f}%" if p >= 6 else "", pctdistance=0.68,
+                                   wedgeprops={"edgecolor": "white", "linewidth": 1.5})
+        for t in auto:
+            t.set_color("white"); t.set_fontsize(9); t.set_weight("bold")
+        ax2.legend(wedges, [f"{c['client'] or 'No person'}  {c['days']}d · " + (_short(float(c['earned'])) if by_pay else f"{c['minutes'] // 60}h")
+                            for c in people],
+                   loc="center left", bbox_to_anchor=(0.98, 0.5), frameon=False, fontsize=9)
+        ax2.set_title("Earned by person" if by_pay else "Hours by person", fontsize=11, loc="left")
+    else:
+        ax2.axis("off")
+        ax2.text(0.5, 0.5, f"⏳ {w['waiting_days']} days waiting for pay   ·   💰 {w['paid_days']} days paid",
+                 ha="center", va="center", fontsize=12)
+    fig.suptitle(title, fontsize=13, weight="bold", y=0.985)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    return buf.getvalue()
+
+
 def report_chart(st: dict, title: str, mtd: dict | None = None, prev_mtd: dict | None = None,
                  compare: tuple[dict, dict, str, str] | None = None, what: str = "") -> bytes | None:
     """Line chart (1st of the month to the report day) + pie of the period's spending;
