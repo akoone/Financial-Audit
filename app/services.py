@@ -575,6 +575,7 @@ async def stats(s: AsyncSession, user: User, start: date, end: date) -> dict:
     by_cat: dict[str, Decimal] = defaultdict(Decimal)
     inc_by_cat: dict[str, Decimal] = defaultdict(Decimal)
     daily: dict[date, Decimal] = defaultdict(Decimal)
+    daily_income: dict[date, Decimal] = defaultdict(Decimal)
     merchants: dict[str, Decimal] = defaultdict(Decimal)
     top = []
     for t in rows:
@@ -583,6 +584,7 @@ async def stats(s: AsyncSession, user: User, start: date, end: date) -> dict:
         if t.type == "income":
             income += amt
             inc_by_cat[name] += amt
+            daily_income[t.occurred_on] += amt
         else:
             expense += -amt
             by_cat[name] += -amt
@@ -600,6 +602,8 @@ async def stats(s: AsyncSession, user: User, start: date, end: date) -> dict:
         "income_by_category": dict(sorted(inc_by_cat.items(), key=lambda x: -x[1])),
         "daily": {start + timedelta(days=i): daily.get(start + timedelta(days=i), Decimal(0))
                   for i in range(days)},
+        "daily_income": {start + timedelta(days=i): daily_income.get(start + timedelta(days=i), Decimal(0))
+                         for i in range(days)},
         "top": [(a, t.merchant or t.note or (t.category.name if t.category else ""), t.occurred_on)
                 for a, t in top[:5]],
         "merchants": dict(sorted(merchants.items(), key=lambda x: -x[1])[:10]),

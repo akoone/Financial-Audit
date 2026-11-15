@@ -87,5 +87,17 @@ async def build_report(s: AsyncSession, user: User, kind: str, today: date | Non
             log.warning("AI insight failed: %s", e)
             lines += ["", f"<i>AI summary unavailable: {html.escape(str(e))}</i>"]
 
-    chart = report_chart(cur, f"{label} · {period}")
+    # Line chart: from the 1st of the month to the report day, with last month's same days dashed
+    m_start = end.replace(day=1)
+    mtd = cur if (start, end) == (m_start, end) else await sv.stats(s, user, m_start, end)
+    pm_end = m_start - timedelta(days=1)
+    pm_start = pm_end.replace(day=1)
+    prev_mtd = await sv.stats(s, user, pm_start, min(pm_end, pm_start + (end - m_start)))
+    compare = None
+    if kind == "month":
+        compare = (cur, prev, f"{start:%B}" + ("" if end == pm_end or (end + timedelta(days=1)).day == 1 else " so far"),
+                   f"{pstart:%B}")
+    what = {"day": "today" if end == sv.local_today(user) else f"on {end:%d %b}", "week": "this week",
+            "month": f"in {start:%B}"}.get(kind, "")
+    chart = report_chart(cur, f"{label} · {period}", mtd=mtd, prev_mtd=prev_mtd, compare=compare, what=what)
     return Report("\n".join(lines), chart)
