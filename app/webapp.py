@@ -661,7 +661,7 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
     def note_json(n: WorkNote) -> dict:
         return {"id": n.id, "day": str(n.day), "title": n.title, "body": n.body, "color": n.color, "pinned": n.pinned,
                 "worked": n.worked, "start": n.start, "end": n.end, "break_min": n.break_min, "minutes": n.minutes,
-                "client": n.client or "", "paid": bool(n.paid), "paid_on": str(n.paid_on) if n.paid_on else None,
+                "client": n.client or "", "address": n.address or "", "paid": bool(n.paid), "paid_on": str(n.paid_on) if n.paid_on else None,
                 "pay": _f(n.pay or 0), "income_tx_id": n.income_tx_id,
                 "extra_minutes": n.extra_minutes or 0, "extra_pay": _f(n.extra_pay or 0), "extra_note": n.extra_note or "",
                 "total_pay": _f(n.total_pay),
@@ -706,6 +706,8 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
                 raise HTTPException(422, "Extra hours is a number, like 2 or 1.5")
         if "extra_note" in body:
             n.extra_note = str(body["extra_note"] or "").strip()[:200]
+        if "address" in body:
+            n.address = " ".join(str(body["address"] or "").split())[:200]
         if "client" in body:
             n.client = " ".join(str(body["client"] or "").split())[:60]
         if "paid" in body:
@@ -765,7 +767,8 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
         q = q.strip()
         if q:
             like = f"%{q}%"
-            cond.append(or_(WorkNote.title.ilike(like), WorkNote.body.ilike(like)))
+            cond.append(or_(WorkNote.title.ilike(like), WorkNote.body.ilike(like), WorkNote.address.ilike(like),
+                            WorkNote.client.ilike(like)))
         else:
             cond.append(WorkNote.day.between(m_start, m_end))
         rows = (await s.execute(select(WorkNote).where(*cond).order_by(
@@ -779,10 +782,14 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
             WorkNote.user_id == user.id, WorkNote.worked.is_(True), WorkNote.pay > 0)
             .order_by(WorkNote.day, WorkNote.id))).all()
         rates = {c or "": _f(p) for c, p in rate_rows}  # last day pay used for each person
+        addr_rows = (await s.execute(select(WorkNote.address, func.max(WorkNote.day)).where(
+            WorkNote.user_id == user.id, WorkNote.address != "").group_by(WorkNote.address)
+            .order_by(func.max(WorkNote.day).desc()).limit(30))).all()
+        addresses = [a for a, _ in addr_rows if a]
         worked_days = sorted({str(n.day) for n in month_rows if n.worked})
         return {"month": f"{m_start:%Y-%m}", "today": str(today), "items": [note_json(n) for n in rows],
                 "days": sorted({str(n.day) for n in month_rows}), "worked_days": worked_days,
-                "clients": clients, "rates": rates, "currency": user.base_currency,
+                "clients": clients, "rates": rates, "addresses": addresses, "currency": user.base_currency,
                 "summary": {"worked_days": len(worked_days), "minutes": sum(n.minutes for n in month_rows),
                             "notes": len(month_rows),
                             "unpaid_days": len({n.day for n in work if not n.paid}),
@@ -819,7 +826,7 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
         s, user = ctx.s, ctx.need()
         today = sv.local_today(user)
         n = WorkNote(user_id=user.id, day=today, title="", body="", color="", pinned=False, worked=False,
-                     start="", end="", break_min=0, client="", paid=False, pay=Decimal(0),
+                     start="", end="", break_min=0, client="", address="", paid=False, pay=Decimal(0),
                      extra_minutes=0, extra_pay=Decimal(0), extra_note="")
         _apply_note(n, body, today)
         if not (n.title or n.body.strip() or n.worked):

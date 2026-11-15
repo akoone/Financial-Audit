@@ -219,6 +219,7 @@ class WorkNote(Base):
     end: Mapped[str] = mapped_column(String(5), default="")
     break_min: Mapped[int] = mapped_column(Integer, default=0)
     client: Mapped[str] = mapped_column(String(60), default="")  # who the work was for; keeps lists apart
+    address: Mapped[str] = mapped_column(String(200), default="")  # where the work was
     paid: Mapped[bool] = mapped_column(Boolean, default=False)  # ticked: money for this day was received
     paid_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     pay: Mapped[Decimal] = mapped_column(Money, default=0)  # what the day earns, in the base currency

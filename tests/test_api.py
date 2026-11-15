@@ -407,7 +407,11 @@ async def test_work_notes(client, s):
     found = (await client.get("/api/notes", params={"q": "warehouse"})).json()["items"]
     assert [x["title"] for x in found] == ["Night shift"]
     # work for different people stays apart; ticking it as paid records the date
-    r = await client.post("/api/notes", json={"title": "Tiling", "worked": True, "client": " Aziz  aka ", "day": "2026-11-03"})
+    r = await client.post("/api/notes", json={"title": "Tiling", "worked": True, "client": " Aziz  aka ", "day": "2026-11-03",
+                                               "address": "Chilonzor 9, house 12"})
+    assert r.json()["address"] == "Chilonzor 9, house 12"
+    assert (await client.get("/api/notes", params={"month": "2026-11"})).json()["addresses"] == ["Chilonzor 9, house 12"]
+    assert [x["title"] for x in (await client.get("/api/notes", params={"q": "chilonzor"})).json()["items"]] == ["Tiling"]
     aziz = r.json()
     assert aziz["client"] == "Aziz aka" and aziz["paid"] is False
     r = await client.patch(f"/api/notes/{aziz['id']}", json={"paid": True})

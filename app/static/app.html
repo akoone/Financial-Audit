@@ -181,6 +181,8 @@
   .wrow.paid .tick { background: var(--good); border-color: var(--good); color: #fff; }
   .wrow .wr-d { font-size: 13px; font-weight: 650; color: var(--accent); }
   .wrow .wr-t { margin-top: 1px; word-break: break-word; }
+  .wrow .wr-t:empty { display: none; }
+  .wrow .wr-a { font-size: 13px; color: var(--ink-2); margin-top: 2px; word-break: break-word; }
   .wrow .wr-m { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; font-size: 12px; }
   .wrow .wr-m:empty { display: none; }
   .wrow .who { background: var(--soft); border-radius: 999px; padding: 1px 8px; color: var(--ink-2); }
@@ -574,7 +576,8 @@ async function renderNotes() {
   const workRow = n => `<div class="wrow ${n.paid ? "paid" : ""}" data-note="${n.id}">
       <button type="button" class="tick" data-tick="${n.id}" role="checkbox" aria-checked="${n.paid}" aria-label="${n.paid ? "Paid, tap to undo" : "Mark as paid"}">${n.paid ? "✓" : ""}</button>
       <div class="grow"><div class="wr-d">${esc(longDay(n.day))}${n.minutes ? ` · ${hm(n.minutes)}` : ""}${n.start && n.end ? ` <span class="muted">(${n.start}–${n.end})</span>` : ""}</div>
-        <div class="wr-t">${esc(n.title || n.body.split("\n")[0] || "Work day")}</div>
+        <div class="wr-t">${esc(n.title || n.body.split("\n")[0] || (n.address ? "" : "Work day"))}</div>
+        ${n.address ? `<div class="wr-a">📍 ${esc(n.address)}</div>` : ""}
         <div class="wr-m">${n.client && N.client === null ? `<span class="who">👤 ${esc(n.client)}</span>` : ""}${n.extra_pay || n.extra_minutes ? `<span class="xtra">⏱ Extra${n.extra_minutes ? " " + hm(n.extra_minutes) : ""}${n.extra_pay ? " +" + esc(short(n.extra_pay)) : ""}</span>` : ""}${n.paid ? `<span class="got">💰 Received ${esc(shortDay(n.paid_on))}</span>` : ""}</div></div>
       ${n.total_pay ? `<div class="wr-pay">${esc(money(n.total_pay, ""))}</div>` : ""}</div>`;
   el.innerHTML = `
@@ -677,6 +680,11 @@ function openNote(n, day) {
     <input class="inp" id="ne-client" list="ne-clients" value="${esc(n.client)}" placeholder="e.g. Aziz aka" maxlength="60" autocomplete="off">
     <datalist id="ne-clients">${clients.map(c => `<option value="${esc(c)}">`).join("")}</datalist>
     ${clients.length ? `<div class="chips scroll" style="margin-top:6px">${clients.map(c => `<button type="button" class="chip" data-pick="${esc(c)}">${esc(c)}</button>`).join("")}</div>` : ""}
+    <label class="label" for="ne-addr" style="margin-top:10px">Address</label>
+    <div class="btn-row" style="gap:8px;align-items:center">
+      <input class="inp" id="ne-addr" list="ne-addrs" value="${esc(n.address || "")}" placeholder="Where you worked" maxlength="200" autocomplete="off" style="flex:1">
+      <button type="button" class="chip" id="ne-map" aria-label="Open address in maps" ${n.address ? "" : "hidden"}>🗺 Map</button></div>
+    <datalist id="ne-addrs">${((N.data && N.data.addresses) || []).map(a => `<option value="${esc(a)}">`).join("")}</datalist>
     <input class="ne-title" id="ne-title" placeholder="Title" value="${esc(n.title)}" maxlength="120" style="margin-top:6px">
     <textarea class="ne-body" id="ne-body" placeholder="Write your note…" style="min-height:110px">${esc(n.body)}</textarea>
     <div class="card">
@@ -727,11 +735,16 @@ function openNote(n, day) {
     const fillRate = () => { const r = rates[$("#ne-client", root).value.trim()]; const f = $("#ne-pay", root); if (r && !f.value) { f.value = r; f.dispatchEvent(new Event("input", {bubbles: true})); } };
     $$("[data-pick]", root).forEach(b => b.onclick = () => { $("#ne-client", root).value = b.dataset.pick; fillRate(); });
     $("#ne-client", root).onchange = fillRate;
+    const addr = $("#ne-addr", root), mapBtn = $("#ne-map", root);
+    addr.oninput = () => { mapBtn.hidden = !addr.value.trim(); };
+    mapBtn.onclick = () => { const u = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(addr.value.trim());
+      if (tg && tg.openLink) tg.openLink(u); else window.open(u, "_blank"); };
     $("#ne-pin", root).onclick = e => { pinned = !pinned; e.target.textContent = pinned ? "📌 Pinned" : "📌 Pin"; e.target.setAttribute("aria-pressed", pinned); };
     $$("[data-c]", root).forEach(b => b.onclick = () => { color = b.dataset.c; $$("[data-c]", root).forEach(x => x.classList.toggle("on", x === b)); });
     $("#ne-save", root).onclick = async () => {
       const w = $("#ne-worked", root).checked, paid = w && $("#ne-paid", root).checked;
       const payload = {day: $("#ne-day", root).value || day, client: $("#ne-client", root).value, title: $("#ne-title", root).value,
+                       address: $("#ne-addr", root).value,
                        body: body.value, color, pinned, worked: w, start: t("s"), end: t("e"), break_min: $("#ne-break", root).value || 0,
                        pay: $("#ne-pay", root).value, extra_hours: $("#ne-xh", root).value, extra_pay: $("#ne-xp", root).value,
                        extra_note: $("#ne-xn", root).value,

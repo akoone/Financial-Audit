@@ -887,10 +887,10 @@ async def backup_zip(s: AsyncSession, user: User) -> bytes:
                                               [[a.at, a.action, a.transaction_id, a.detail, json.dumps(a.data, ensure_ascii=False)]
                                                for a in audit_rows]))
         z.writestr("work_notes.csv", to_csv(
-            ["date", "worked_for", "title", "text", "worked", "start", "end", "break_min", "worked_minutes",
+            ["date", "worked_for", "address", "title", "text", "worked", "start", "end", "break_min", "worked_minutes",
              f"day_pay_{user.base_currency}", "extra_minutes", f"extra_pay_{user.base_currency}", "extra_note",
              f"total_pay_{user.base_currency}", "paid", "paid_on", "color", "pinned"],
-            [[n.day, n.client, n.title, n.body, n.worked, n.start, n.end, n.break_min, n.minutes,
+            [[n.day, n.client, n.address, n.title, n.body, n.worked, n.start, n.end, n.break_min, n.minutes,
               n.pay, n.extra_minutes, n.extra_pay, n.extra_note, n.total_pay,
               n.paid, n.paid_on or "", n.color, n.pinned] for n in notes]))
         z.writestr("backup.json", json.dumps({
