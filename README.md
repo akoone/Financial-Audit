@@ -12,18 +12,23 @@ It works for anyone who opens it. Every Telegram user gets their own separate da
 | Auto-categories | Guessed from keywords, then from your own corrections (it learns), then AI |
 | Transfers | `500 bank>cash`, or `1000 usd>bank 1350000` to record the amount you actually received |
 | Multi-currency | Log any currency. Daily exchange rates are used for totals in your base currency |
-| Receipt photos & payment screenshots | Send a photo or a Click/Payme/bank-app screenshot. With an AI key every line is read and categorized; without one, free Tesseract OCR reads the total, date and store |
+| Receipt photos & payment screenshots | Send a photo or a Click/Payme/bank-app screenshot, or take one with the camera inside the app. With an AI key every line is read and categorized. Without one, free OCR reads the total, date and store: OCR.space (if `OCR_SPACE_API_KEY` is set) with Tesseract as the fallback |
 | Bank alerts | Forward a bank SMS or notification text, or have your phone send it automatically (`/connect`) |
 | Bank statements | Send a CSV or PDF statement, with the account name as the caption. Duplicates are skipped |
 | No double counting | A receipt and a bank alert for the same purchase are matched and counted once |
-| Reports | Sent automatically every day, every Sunday and on the 1st of the month, or on demand with `/report week`. Each report has a chart, an AI summary and suggestions |
-| Mini App | The **Open app** button next to the message box (or `/app`) opens a full app inside Telegram: overview with charts, quick add (with receipt scan), searchable history with edit and delete, accounts with real-balance corrections, month statements, backups and settings |
+| Reports | Sent automatically every day, every Sunday and on the 1st of the month, or on demand with `/report week`. You choose the send times (24-hour) in the app. Every report has a line chart of the month so far (vs last month) and a pie chart by category. The monthly report adds bar charts comparing the month with the previous one. AI summary and suggestions when an AI key is set |
+| Mini App | The **Open app** button next to the message box (or `/app`) opens a full app inside Telegram. It has an overview with charts, quick add with receipt scan and camera, searchable history with edit and delete, accounts with real-balance corrections, month statements, backups and settings. Swipe left on a row to delete or archive it. It also has Day / Night / Auto themes and can be added to the home screen |
+| Overview | Tap **Expense**, **Income** or **Net worth** to switch what it shows. Pick Day, Week, Month, Year or any **Dates** range (e.g. Nov 1 – Nov 10). An "Other money moves" card shows transfers, balance corrections and debts. A random one of the 99 Names of Allah (Arabic with Uzbek meaning) sits at the top; tap it for another |
+| Categories | Create, rename, re-emoji and delete categories in the app. Entries of a deleted category move to another one and are never lost |
+| Debts | Money you lent or borrowed, kept apart from net worth: record repayments, edit or delete mistakes. Paid-off debts are archived |
+| Work notes | The **Notes** tab records daily work. Each entry has a date, the person you worked for, the day's pay, optional hours and extra work (extra hours plus extra pay). Tick a day when you're paid: it moves to **Received** with the date and is added to income. Each person gets a separate list. A calendar shows the days you worked, a Week / Month card charts your earnings, and the weekly and monthly reports include a work section. Plain notes with colors, pins and search work too |
 | Ask anything | `? how much did I spend on eating out this month` |
 | Net worth | `/networth`. Investments and property use `/value Stocks 15400` |
 | Daily records | Every night the bot freezes each account's balance and your net worth. `/networth` shows the change vs 30 days, the start of the year and 1 year ago |
 | Month-end statement | `/statement` (or `last`, `2026-10`, `2026`) shows opening vs closing net worth and what moved it: income, spending, savings, and value/exchange-rate changes. Includes a CSV. It's sent automatically on the 1st |
 | Edit history | Every new entry, change and deletion is logged with the full record. See `/edits` |
-| Backups | `/backup` sends a zip with all of your data: CSV files for Excel plus JSON. A backup is also sent automatically on the 1st of each month, so Telegram keeps a copy in your chat |
+| Backups | `/backup` sends a zip with all of your data: CSV files for Excel (including `work_notes.csv`) plus JSON. A backup is also sent automatically on the 1st of each month, so Telegram keeps a copy in your chat |
+| SQL tools | The data lives in PostgreSQL (Neon). Connect DBeaver, pgAdmin, DataGrip, Excel or Power BI with the connection details from the Neon console. Main tables: `transactions`, `accounts`, `categories`, `work_notes`, `snapshots`, `snapshot_lines`. MySQL Workbench can't connect to PostgreSQL, so import the backup CSVs into it instead |
 | Export / privacy | `/export` downloads a CSV. `/deleteme` wipes all of your data |
 
 ## Setup (about 15 minutes)
@@ -82,10 +87,13 @@ app/
   categories.py  default categories and keywords
   importers.py   bank alert saving with de-duplication, CSV/PDF statement import
   ai.py          Claude API: receipts, alerts, statements, categories, insights, questions
-  reports.py     report text + AI advice;  charts.py  report chart image
+  reports.py     report text (money and work) + AI advice
+  charts.py      report chart images: month-so-far line, pie, monthly bars, work chart
+  ocr.py         free receipt reading: OCR.space, then Tesseract
   scheduler.py   per-user report times in their timezone
   webapp.py      Mini App API (Telegram initData verified), /ingest bank alerts, Telegram webhook
   static/app.html  the Mini App (one page, Telegram theme colors, ECharts)
+  static/names99.json  the 99 Names of Allah shown on the overview
   fx.py          daily exchange rates (open.er-api.com), cached in the DB
   models.py      database schema
 tests/           parser, money logic, imports, reports, full bot conversation (pytest)
@@ -95,4 +103,6 @@ Run the tests with `pip install -r requirements-dev.txt && pytest`.
 
 ## Next steps (v2 ideas)
 
-Budgets with alerts, recurring payments (rent, subscriptions), debts between people, savings goals, monthly net-worth history snapshots, open banking where your country allows it, and replies in more languages.
+Budgets with alerts, recurring payments (rent, subscriptions), savings goals, open banking where your country allows it, and replies in more languages (Uzbek, Russian).
+
+Keeping the service awake on Render's free plan: the bot pings its own `/health` every 10 minutes, and `.github/workflows/keep-awake.yml` does the same from GitHub Actions (set the `BOT_URL` repository variable if your address differs).

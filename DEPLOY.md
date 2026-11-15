@@ -32,10 +32,12 @@ That's it. In Telegram, open the bot: there's now an **Open app** button next to
 
 ### A3. Keep it awake (needed for automatic reports)
 
-A free Render service sleeps after 15 minutes without visitors. Messages still wake it (the first reply then takes up to a minute), but the evening reports and the nightly balance record only run while it's awake. A free pinger fixes that:
+A free Render service sleeps after 15 minutes without visitors. Messages still wake it (the first reply then takes up to a minute), but the evening reports and the nightly balance record only run while it's awake. Two pingers are already built in:
 
-1. Sign up at **cron-job.org** (free).
-2. Create a cron job: URL `https://YOUR-SERVICE.onrender.com/health`, every **10 minutes**.
+- **The bot pings itself** at `/health` every 10 minutes while it runs (turn off with `KEEP_AWAKE=false`).
+- **GitHub Actions** runs `.github/workflows/keep-awake.yml` every 10 minutes. It wakes the service even after Render has put it to sleep. If your address isn't `https://money-tracker-bot-4io6.onrender.com`, set a repository variable `BOT_URL` (GitHub → Settings → Secrets and variables → Actions → Variables).
+
+For a third, independent ping, sign up at **cron-job.org** (free) and create a job for `https://YOUR-SERVICE.onrender.com/health` every **10 minutes**.
 
 Render gives 750 free hours a month, enough for one service running all month.
 
