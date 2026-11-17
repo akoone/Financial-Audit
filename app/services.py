@@ -647,6 +647,7 @@ async def work_stats(s: AsyncSession, user: User, start: date, end: date, client
         "earned": sum((n.total_pay for n in rows), Decimal(0)),
         "extra_pay": sum((Decimal(str(n.extra_pay or 0)) for n in rows), Decimal(0)),
         "extra_minutes": sum(int(n.extra_minutes or 0) for n in rows),
+        "default_hours_days": len({n.day for n in rows if not n.hours_entered}),
         "waiting_pay": sum((n.total_pay for n in rows if not n.paid), Decimal(0)),
         "received_pay": sum((n.total_pay for n in rows if n.paid), Decimal(0)),
         "by_client": sorted(({"client": c["client"], "days": len(c["days"]), "minutes": c["minutes"],

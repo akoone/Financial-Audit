@@ -201,6 +201,7 @@ class SnapshotLine(Base):
     fx_rate: Mapped[Decimal] = mapped_column(Rate, default=Decimal(1))
 
 
+DEFAULT_WORK_START, DEFAULT_WORK_END = "07:00", "17:00"  # assumed when a work day has no hours entered
 NOTE_COLORS = ["", "yellow", "green", "blue", "pink", "purple", "orange", "gray"]
 
 
@@ -234,16 +235,28 @@ class WorkNote(Base):
 
     @property
     def minutes(self) -> int:
-        """Worked minutes from start/end (an end before the start means past midnight), minus the break."""
-        extra = int(self.extra_minutes or 0) if self.worked else 0
-        if not (self.worked and self.start and self.end):
-            return extra
-        h1, m1 = map(int, self.start.split(":"))
-        h2, m2 = map(int, self.end.split(":"))
+        """Worked minutes from start/end (an end before the start means past midnight), minus the break,
+        plus extra hours. A work day without hours counts as 07:00–17:00."""
+        if not self.worked:
+            return 0
+        extra = int(self.extra_minutes or 0)
+        start, end = (self.start, self.end) if self.hours_entered else (DEFAULT_WORK_START, DEFAULT_WORK_END)
+        h1, m1 = map(int, start.split(":"))
+        h2, m2 = map(int, end.split(":"))
         mins = (h2 * 60 + m2) - (h1 * 60 + m1)
         if mins <= 0:
             mins += 24 * 60
-        return max(0, mins - (self.break_min or 0)) + extra
+        return max(0, mins - ((self.break_min or 0) if self.hours_entered else 0)) + extra
+
+    @property
+    def hours_entered(self) -> bool:
+        return bool(self.start and self.end)
+
+    @property
+    def hourly(self) -> Decimal | None:
+        """Average pay per hour for the day (day pay + extra pay over all hours worked)."""
+        mins = self.minutes
+        return (self.total_pay * 60 / mins).quantize(Decimal("0.01")) if mins and self.total_pay else None
 
     @property
     def total_pay(self) -> Decimal:

@@ -83,6 +83,10 @@ async def build_report(s: AsyncSession, user: User, kind: str, today: date | Non
             if work["earned"]:
                 lines.append(f"Earned by working: <b>{sv.fmt(work['earned'], c)}</b>"
                              + (f" (extra work {sv.fmt(work['extra_pay'], c)})" if work["extra_pay"] else ""))
+                if work["minutes"]:
+                    lines.append(f"Average per hour: <b>{sv.fmt(work['earned'] * 60 / work['minutes'], c)}</b>"
+                                 + (f" ({dd(work['default_hours_days'])} counted as 07:00–17:00, no hours entered)"
+                                    if work["default_hours_days"] else ""))
             elif work["extra_minutes"]:
                 lines.append(f"Extra hours: {sv.fmt_hours(work['extra_minutes'])}")
             for cl in work["by_client"][:6]:

@@ -403,7 +403,7 @@ async def test_work_notes(client, s):
     assert (await client.post("/api/notes", json={"title": "x", "start": "25:00"})).status_code == 422
     lst = (await client.get("/api/notes")).json()
     assert lst["items"][0]["title"] == "Idea"  # pinned first
-    assert lst["summary"] == {"worked_days": 1, "minutes": 480, "notes": 2, "unpaid_days": 1, "unpaid_minutes": 480, "paid_days": 0, "earned": 0, "extra_pay": 0, "waiting_pay": 0, "received_pay": 0}
+    assert lst["summary"] == {"worked_days": 1, "minutes": 480, "notes": 2, "unpaid_days": 1, "unpaid_minutes": 480, "paid_days": 0, "earned": 0, "extra_pay": 0, "waiting_pay": 0, "received_pay": 0, "hourly": None}
     found = (await client.get("/api/notes", params={"q": "warehouse"})).json()["items"]
     assert [x["title"] for x in found] == ["Night shift"]
     # work for different people stays apart; ticking it as paid records the date
@@ -426,7 +426,9 @@ async def test_work_notes(client, s):
     assert any(x["amount"] == 150 and "Aziz aka" in x["note"] for x in inc)
     # extra work that day: 2 hours, paid 40 on top; the income entry follows the new total
     r = await client.patch(f"/api/notes/{aziz['id']}", json={"extra_hours": "2", "extra_pay": "40", "extra_note": "finished the bathroom"})
-    assert r.json()["total_pay"] == 190 and r.json()["minutes"] == 120
+    # no hours entered: counted as 07:00–17:00 (10 h) + 2 extra hours = 12 h, so 190 / 12 an hour
+    assert r.json()["total_pay"] == 190 and r.json()["minutes"] == 720 and r.json()["hours_default"] is True
+    assert r.json()["hourly"] == 15.83
     inc = (await client.get("/api/transactions", params={"type": "income"})).json()["items"]
     assert [x["amount"] for x in inc if "Aziz aka" in x["note"]] == [190]
     lst = (await client.get("/api/notes", params={"month": "2026-11"})).json()

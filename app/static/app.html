@@ -195,7 +195,9 @@
   .wrow .got { color: var(--good); font-weight: 600; }
   .wrow .xtra { background: color-mix(in srgb, #f08a24 18%, transparent); color: #c26a10; border-radius: 999px; padding: 1px 8px; font-weight: 600; }
   .ne-extra { margin-top: 10px; padding: 12px; border-radius: 12px; background: var(--soft); }
-  .wrow .wr-pay { flex: none; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .wrow .wr-pay { flex: none; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; text-align: right; }
+  .wrow .wr-pay small { display: block; font-size: 11px; font-weight: 500; color: var(--hint); }
+  .wrow .dflt { font-style: italic; }
   .wrow.paid .wr-pay { color: var(--good); }
   .neg-soft { color: #d98a00; }
   .seg.mini { display: inline-flex; float: right; padding: 2px; font-size: 12px; font-weight: 500; }
@@ -544,8 +546,10 @@ function show(view) {
 // ---------- work notes ----------
 const NOTE_COLORS = ["", "yellow", "green", "blue", "pink", "purple", "orange", "gray"];
 const hm = mins => mins ? `${Math.floor(mins / 60)}h${mins % 60 ? " " + (mins % 60) + "m" : ""}` : "";
+const DEFAULT_HOURS = ["07:00", "17:00"];  // assumed when no hours are entered
 function noteMinutes(worked, start, end, brk) {
-  if (!worked || !start || !end) return 0;
+  if (!worked) return 0;
+  if (!start || !end) { [start, end] = DEFAULT_HOURS; brk = 0; }
   const [a, b] = start.split(":").map(Number), [c, d] = end.split(":").map(Number);
   let m = c * 60 + d - (a * 60 + b);
   if (m <= 0) m += 1440;
@@ -584,11 +588,11 @@ async function renderNotes() {
   const longDay = s => parseD(s).toLocaleDateString(undefined, {weekday: "short", day: "numeric", month: "short"});
   const workRow = n => `<div class="wrow ${n.paid ? "paid" : ""}" data-note="${n.id}">
       <button type="button" class="tick" data-tick="${n.id}" role="checkbox" aria-checked="${n.paid}" aria-label="${n.paid ? "Paid, tap to undo" : "Mark as paid"}">${n.paid ? "✓" : ""}</button>
-      <div class="grow"><div class="wr-d">${esc(longDay(n.day))}${n.minutes ? ` · ${hm(n.minutes)}` : ""}${n.start && n.end ? ` <span class="muted">(${n.start}–${n.end})</span>` : ""}</div>
+      <div class="grow"><div class="wr-d">${esc(longDay(n.day))}${n.minutes ? ` · ${hm(n.minutes)}` : ""}${n.start && n.end ? ` <span class="muted">(${n.start}–${n.end})</span>` : n.hours_default ? ` <span class="muted dflt">(07:00–17:00, default)</span>` : ""}</div>
         <div class="wr-t">${esc(n.title || n.body.split("\n")[0] || (n.address ? "" : "Work day"))}</div>
         ${n.address ? `<div class="wr-a">📍 ${esc(n.address)}</div>` : ""}
         <div class="wr-m">${n.client && N.client === null ? `<span class="who">👤 ${esc(n.client)}</span>` : ""}${n.extra_pay || n.extra_minutes ? `<span class="xtra">⏱ Extra${n.extra_minutes ? " " + hm(n.extra_minutes) : ""}${n.extra_pay ? " +" + esc(short(n.extra_pay)) : ""}</span>` : ""}${n.paid ? `<span class="got">💰 Received ${esc(shortDay(n.paid_on))}</span>` : ""}</div></div>
-      ${n.total_pay ? `<div class="wr-pay">${esc(money(n.total_pay, ""))}</div>` : ""}</div>`;
+      ${n.total_pay ? `<div class="wr-pay">${esc(money(n.total_pay, ""))}${n.hourly ? `<small>≈ ${esc(short(n.hourly))}/h</small>` : ""}</div>` : ""}</div>`;
   el.innerHTML = `
     <div class="chips scroll" id="nt-who" style="margin-bottom:10px">
       <button type="button" class="chip ${N.client === null ? "on" : ""}" data-who="*">All</button>
@@ -678,7 +682,7 @@ async function drawWorkStats(el) {
   box.className = "";
   box.innerHTML = `<div class="muted small">${esc(shortDay(w.start))} – ${esc(shortDay(w.end))}${cmp ? " · " + esc(cmp) : ""}</div>
     <div class="nt-sum"><div><b>${w.days}</b><span>days${w.minutes ? " · " + hm(w.minutes) : ""}</span></div>
-      <div><b>${esc(short(w.earned))}</b><span>earned</span></div>
+      <div><b>${esc(short(w.earned))}</b><span>earned${w.hourly ? ` · ≈ ${esc(short(w.hourly))}/h` : ""}</span></div>
       <div><b class="neg-soft">${esc(short(w.waiting_pay))}</b><span>waiting · ${w.waiting_days} d</span></div></div>
     ${w.days ? `<div class="chart" id="c-work" style="height:170px;margin-top:6px"></div>` : `<div class="muted small" style="margin-top:8px">No working days yet in this ${w.period}.</div>`}
     ${w.by_client.length > 1 || (w.by_client[0] && w.by_client[0].client) ? `<div style="margin-top:4px">${w.by_client.map(p => `<div class="kv"><span class="k">👤 ${esc(p.client || "No person")}</span>
@@ -741,6 +745,8 @@ function openNote(n, day) {
           <label>Start ${timeSel("s", n.start)}</label><label>End ${timeSel("e", n.end)}</label>
           <label>Break <input class="inp" id="ne-break" inputmode="numeric" value="${n.break_min || ""}" placeholder="0" style="width:64px;padding:6px 8px"> min</label>
           <b id="ne-total" style="margin-left:auto"></b></div>
+        <div class="muted small" style="margin-top:6px">No hours entered? The day counts as 07:00–17:00 (10 h).</div>
+        <div id="ne-hourly" style="margin-top:6px;font-weight:650;color:var(--accent)"></div>
         <div class="switch-row" style="margin-top:10px"><div class="grow">Paid<div class="sub">Tick when paid · it's added to income</div></div>
           <label class="switch"><input type="checkbox" id="ne-paid" ${n.paid ? "checked" : ""} aria-label="Paid"><span></span></label></div>
         <div id="ne-paidbox" ${n.paid ? "" : "hidden"} style="padding-bottom:4px"><label class="label" for="ne-paid-on" style="margin-left:0">Received on</label>
@@ -755,9 +761,17 @@ function openNote(n, day) {
     const grow = () => { body.style.height = "auto"; body.style.height = Math.max(110, body.scrollHeight) + "px"; };
     body.oninput = grow; grow();
     const t = k => { const h = $(`[data-t=${k}h]`, root).value; return h ? `${h}:${$(`[data-t=${k}m]`, root).value}` : ""; };
-    const total = () => { const m = noteMinutes($("#ne-worked", root).checked, t("s"), t("e"), $("#ne-break", root).value);
-      $("#ne-total", root).textContent = m ? `= ${hm(m)}` : ""; };
-    $$("#ne-workbox select, #ne-break", root).forEach(x => x.oninput = x.onchange = total); total();
+    const total = () => {
+      const xh = parseFloat(String($("#ne-xh", root).value || "").replace(",", ".")) || 0;
+      const entered = !!(t("s") && t("e"));
+      const m = noteMinutes($("#ne-worked", root).checked, t("s"), t("e"), $("#ne-break", root).value) + Math.round(xh * 60);
+      const nm = v => parseFloat(String(v || "").replace(/[\s\u00a0]/g, "").replace(",", ".")) || 0;
+      const pay = nm($("#ne-pay", root).value) + nm($("#ne-xp", root).value);
+      $("#ne-total", root).textContent = m ? `= ${hm(m)}${entered ? "" : " (default 07:00–17:00)"}` : "";
+      $("#ne-hourly", root).textContent = m && pay ? `≈ ${money(Math.round(pay * 60 / m), cur)} an hour` : "";
+    };
+    $$("#ne-workbox select, #ne-break, #ne-pay, #ne-xp, #ne-xh", root).forEach(x => x.addEventListener("input", total));
+    $$("#ne-workbox select", root).forEach(x => x.addEventListener("change", total)); total();
     $("#ne-worked", root).onchange = e => { $("#ne-workbox", root).hidden = !e.target.checked; total(); };
     $("#ne-paid", root).onchange = e => { $("#ne-paidbox", root).hidden = !e.target.checked; };
     $("#ne-xbtn", root).onclick = e => { e.target.hidden = true; $("#ne-extra", root).hidden = false; $("#ne-xh", root).focus(); };

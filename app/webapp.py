@@ -665,8 +665,12 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
                 "client": n.client or "", "address": n.address or "", "paid": bool(n.paid), "paid_on": str(n.paid_on) if n.paid_on else None,
                 "pay": _f(n.pay or 0), "income_tx_id": n.income_tx_id,
                 "extra_minutes": n.extra_minutes or 0, "extra_pay": _f(n.extra_pay or 0), "extra_note": n.extra_note or "",
-                "total_pay": _f(n.total_pay),
+                "total_pay": _f(n.total_pay), "hours_default": bool(n.worked and not n.hours_entered),
+                "hourly": _f(n.hourly) if n.hourly is not None else None,
                 "updated": n.updated_at.isoformat() if n.updated_at else None}
+
+    def _hourly(pay, minutes):
+        return _f((Decimal(str(pay)) * 60 / minutes).quantize(Decimal("0.01"))) if minutes and pay else None
 
     def _hhmm(v) -> str:
         v = str(v or "").strip()
@@ -804,7 +808,8 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
                             "earned": _f(sum((n.total_pay for n in work), Decimal(0))),
                             "extra_pay": _f(sum((Decimal(str(n.extra_pay or 0)) for n in work), Decimal(0))),
                             "waiting_pay": _f(sum((n.total_pay for n in work if not n.paid), Decimal(0))),
-                            "received_pay": _f(sum((n.total_pay for n in work if n.paid), Decimal(0)))}}
+                            "received_pay": _f(sum((n.total_pay for n in work if n.paid), Decimal(0))),
+                            "hourly": _hourly(sum((n.total_pay for n in work), Decimal(0)), sum(n.minutes for n in work))}}
 
     @app.get("/api/notes/stats")
     async def notes_stats(period: str = "week", client: str | None = None, ctx: Ctx = Depends(get_ctx)):
@@ -823,6 +828,7 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
                 "by_client": [{**c, "earned": _f(c["earned"]), "waiting_pay": _f(c["waiting_pay"])} for c in cur["by_client"]],
                 "earned": _f(cur["earned"]), "waiting_pay": _f(cur["waiting_pay"]), "received_pay": _f(cur["received_pay"]),
                 "extra_pay": _f(cur["extra_pay"]), "extra_minutes": cur["extra_minutes"],
+                "hourly": _hourly(cur["earned"], cur["minutes"]), "default_hours_days": cur["default_hours_days"],
                 "currency": user.base_currency,
                 "daily": [{"date": str(d), "minutes": m, "pay": _f(cur["daily_pay"][d])} for d, m in cur["daily"].items()],
                 "prev": {"days": prev["days"], "minutes": prev["minutes"], "earned": _f(prev["earned"])}}
