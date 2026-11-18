@@ -33,7 +33,7 @@ It works for anyone who opens it. Every Telegram user gets their own separate da
 
 ## Setup (about 15 minutes)
 
-To put it online for free, follow **[DEPLOY.md](DEPLOY.md)**: Render + Neon (easiest, HTTPS and the Mini App work automatically) or Oracle Cloud Always Free.
+To put it online for free, follow **[DEPLOY.md](DEPLOY.md)**: Render + Neon (easiest, HTTPS and the Mini App work automatically) or Oracle Cloud Always Free (24/7, phone-friendly guide in **[DEPLOY-ORACLE.md](DEPLOY-ORACLE.md)**).
 
 1. **Create the bot.** In Telegram, open @BotFather, send `/newbot`, and copy the token.
 2. **Optional: an AI key** at https://console.anthropic.com (prepaid credit; separate from a Claude Pro subscription). Without it the bot still works, and receipts are read with free OCR; AI alerts, AI advice and questions are off.
@@ -65,7 +65,7 @@ Set `WEBAPP_URL=https://bot.example.com` in `.env` and restart. Then:
 ## Keeping your records for years
 
 - **Database.** Use PostgreSQL, either Neon or the bundled one with Docker. All money is stored as exact decimals, never rounded floats. New versions add their new columns automatically on start, without touching existing data.
-- **Three independent copies.** The database itself, the monthly backup zip in your Telegram chat, and (with Docker) the daily `pg_dump` from DEPLOY.md. If one is lost, the others remain.
+- **Three independent copies.** The database itself, the monthly backup zip in your Telegram chat, and (with Docker) the nightly `pg_dump` from DEPLOY-ORACLE.md. If one is lost, the others remain.
 - **Frozen history.** Nightly snapshots record what every account held each day, in its own currency and in your base currency at that day's exchange rate. Old statements therefore never change, even when rates or later edits change today's numbers.
 - **Readable without the bot.** The backup is plain CSV and JSON, so you can open it in Excel or import it anywhere, years from now.
 

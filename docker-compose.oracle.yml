@@ -1,0 +1,36 @@
+# Extra settings for an always-on server (Oracle Cloud). Used on top of docker-compose.yml:
+# the setup script puts COMPOSE_FILE=docker-compose.yml:docker-compose.oracle.yml in .env,
+# so plain `docker compose ...` commands pick up both files. See DEPLOY-ORACLE.md.
+services:
+  bot:
+    # Only reachable from the server itself; the outside world comes in through Caddy (HTTPS).
+    ports: !override
+      - "127.0.0.1:8080:8080"
+    logging: &logs
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  db:
+    logging: *logs
+
+  caddy:
+    image: caddy:2
+    # Starts only when COMPOSE_PROFILES=https is in .env (i.e. a DOMAIN is set)
+    profiles: ["https"]
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/oracle/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [bot]
+    logging: *logs
+
+volumes:
+  caddy_data:
+  caddy_config:

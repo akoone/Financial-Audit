@@ -1,0 +1,6 @@
+# HTTPS for the Mini App. Caddy gets a free Let's Encrypt certificate for DOMAIN
+# (set in .env, e.g. mybot.duckdns.org) and renews it by itself.
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy bot:8080
+}
