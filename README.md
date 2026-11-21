@@ -105,4 +105,4 @@ Run the tests with `pip install -r requirements-dev.txt && pytest`.
 
 Budgets with alerts, recurring payments (rent, subscriptions), savings goals, open banking where your country allows it, and replies in more languages (Uzbek, Russian).
 
-Keeping the service awake on Render's free plan: the bot pings its own `/health` every 10 minutes, and `.github/workflows/keep-awake.yml` does the same from GitHub Actions (set the `BOT_URL` repository variable if your address differs).
+Keeping the service awake on Render's free plan: the bot pings its own `/health` every 10 minutes; add an outside ping such as cron-job.org (see DEPLOY.md). On Oracle Cloud none of this is needed.

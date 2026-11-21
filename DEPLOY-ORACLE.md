@@ -19,7 +19,7 @@ Steps:
 7. [Pause the Render copy](#7-pause-the-render-copy)
 8. [Install the bot (one command)](#8-install-the-bot-one-command)
 9. [Check it works](#9-check-that-it-works)
-10. [Clean up Render and the keep-awake ping](#10-clean-up)
+10. [Clean up Render](#10-clean-up)
 
 ---
 
@@ -145,7 +145,7 @@ If something is wrong, see [Troubleshooting](#troubleshooting).
 
 Once the bot has worked for a day or two:
 
-1. **Turn off the keep-awake ping.** It was only needed for Render. On github.com (desktop mode) → **akoone/financial-audit → Actions → Keep bot awake → ⋯ → Disable workflow**. (Or delete `.github/workflows/keep-awake.yml`.)
+1. **The GitHub keep-awake ping** is already removed from the repository (it was only needed for Render, and fails with *503* once Render is suspended).
 2. If you made a job on **cron-job.org** for the Render address, delete it.
 3. If you set the Mini App in **@BotFather** (*Bot Settings → Configure Mini App*), change its URL to `https://YOUR-DOMAIN/app`.
 4. Delete the Render service: **money-tracker-bot → Settings → Delete Web Service**.
