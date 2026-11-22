@@ -208,6 +208,20 @@ docker compose logs --tail 20 bot
 
 The log should say `Database: PostgreSQL` (without "Neon"). A message like `unrecognized configuration parameter "transaction_timeout"` during the restore is harmless. Keep the Neon project for a few weeks as an extra copy before deleting it.
 
+## Google Cloud instead of Oracle
+
+If Oracle refuses your card, Google Cloud's free tier works the same way (one free **e2-micro** server, forever):
+
+1. Sign up at **console.cloud.google.com/freetrial** (card is checked, not charged; turn on overseas payments on Korean cards).
+2. **Compute Engine → VM instances → Create instance**: name `money-bot`; region **us-west1, us-central1 or us-east1**; series **E2**, type **e2-micro**; *OS and storage*: Ubuntu LTS (x86/64), **Standard persistent disk**, 30 GB (the default "Balanced" disk is not free); *Data protection*: No backups; *Networking*: tick **Allow HTTP** and **Allow HTTPS** traffic. Create.
+3. Point a DuckDNS name at the **External IP** (step 5 above).
+4. Click **SSH** next to the server (opens a terminal in the browser, no key files), then:
+   ```bash
+   sudo apt-get update && sudo apt-get install -y git
+   git clone https://github.com/akoone/Financial-Audit.git finance-bot && cd finance-bot && bash deploy/oracle/setup.sh
+   ```
+5. Before the 90-day trial ends, click **Activate full account**, or Google deletes the server. You still pay nothing within the free limits. Add a $1 alert under **Billing → Budgets & alerts**.
+
 ## Troubleshooting
 
 | Problem | Fix |

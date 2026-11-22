@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# One-time setup of the money tracker bot on a fresh Ubuntu server (Oracle Cloud Always Free).
+# One-time setup of the money tracker bot on a fresh Ubuntu server (Oracle Cloud or Google Cloud free tier).
 # Run from the repository folder:   bash deploy/oracle/setup.sh
+# On a minimal image without git:   sudo apt-get update && sudo apt-get install -y git
 # Safe to run again: steps that are already done are skipped. See DEPLOY-ORACLE.md.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -14,23 +15,40 @@ if [ "$(swapon --show | wc -l)" -eq 0 ] && [ "$(free -m | awk '/Mem:/{print $2}'
   grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
 fi
 
-# 2. Docker (starts automatically after every reboot)
+# 2. Basic tools (minimal Ubuntu images, e.g. on Google Cloud, lack some of them)
+NEED=""
+for t in curl:curl crontab:cron iptables:iptables nano:nano; do
+  command -v "${t%%:*}" >/dev/null || NEED="$NEED ${t##*:}"
+done
+if [ -n "$NEED" ]; then
+  say "Installing basic tools:$NEED"
+  sudo apt-get update -q && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q $NEED
+fi
+
+# 3. Docker (starts automatically after every reboot). Ubuntu's own packages first; Docker's script as backup.
 if ! command -v docker >/dev/null; then
   say "Installing Docker (2-3 minutes)"
-  curl -fsSL https://get.docker.com | sudo sh
-  sudo usermod -aG docker "$USER"
+  sudo apt-get update -q
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q docker.io docker-compose-v2 \
+    || curl -fsSL https://get.docker.com | sudo sh
+fi
+if ! sudo docker compose version >/dev/null 2>&1; then
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q docker-compose-v2 || curl -fsSL https://get.docker.com | sudo sh
 fi
 sudo systemctl enable --now docker >/dev/null 2>&1 || true
 
-# 3. Server firewall: Oracle's Ubuntu image blocks everything except SSH. Open 80 and 443 for HTTPS.
-say "Opening ports 80 and 443 in the server firewall"
-for p in 80 443; do
-  sudo iptables -C INPUT -p tcp --dport $p -j ACCEPT 2>/dev/null || sudo iptables -I INPUT 1 -p tcp --dport $p -j ACCEPT
-done
-sudo iptables -C INPUT -p udp --dport 443 -j ACCEPT 2>/dev/null || sudo iptables -I INPUT 1 -p udp --dport 443 -j ACCEPT
-if command -v netfilter-persistent >/dev/null; then sudo netfilter-persistent save >/dev/null 2>&1 || true; fi
+# 4. Server firewall: Oracle's Ubuntu image blocks everything except SSH (a REJECT rule). Open 80 and 443.
+#    Other clouds (Google) use their own firewall and leave the server's open, so this is skipped there.
+if sudo iptables -S INPUT 2>/dev/null | grep -q -- '-j REJECT'; then
+  say "Opening ports 80 and 443 in the server firewall"
+  for p in 80 443; do
+    sudo iptables -C INPUT -p tcp --dport $p -j ACCEPT 2>/dev/null || sudo iptables -I INPUT 1 -p tcp --dport $p -j ACCEPT || true
+  done
+  sudo iptables -C INPUT -p udp --dport 443 -j ACCEPT 2>/dev/null || sudo iptables -I INPUT 1 -p udp --dport 443 -j ACCEPT || true
+  if command -v netfilter-persistent >/dev/null; then sudo netfilter-persistent save >/dev/null 2>&1 || true; fi
+fi
 
-# 4. Settings (.env). Asks only for what's missing.
+# 5. Settings (.env). Asks only for what's missing.
 if [ ! -f .env ]; then
   say "A few questions (long-press to paste on a phone; press Enter to skip optional ones)"
   read -rp "Bot token from @BotFather: " TOKEN
@@ -61,11 +79,11 @@ ENV
 fi
 grep -q '^COMPOSE_FILE=' .env || echo 'COMPOSE_FILE=docker-compose.yml:docker-compose.oracle.yml' >> .env
 
-# 5. Build and start
+# 6. Build and start
 say "Building and starting the bot (first time: 5-10 minutes)"
 sudo docker compose up -d --build
 
-# 6. Nightly backup at 03:00
+# 7. Nightly backup at 03:00
 chmod +x deploy/oracle/backup.sh
 JOB="0 3 * * * $(pwd)/deploy/oracle/backup.sh >> $HOME/backups.log 2>&1"
 ( crontab -l 2>/dev/null | grep -v 'deploy/oracle/backup.sh' ; echo "$JOB" ) | crontab -

@@ -57,8 +57,9 @@ async def setup_profile(bot: Bot, settings: Settings):
         if settings.https_url:
             # Only set when this copy has a public HTTPS address, so a test copy never removes
             # the button of the real one.
-            await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(
-                text="Open app", web_app=WebAppInfo(url=f"{settings.https_url}/app")))
+            button = MenuButtonWebApp(text="Open app", web_app=WebAppInfo(url=f"{settings.https_url}/app"))
+            await bot.set_chat_menu_button(menu_button=button)
+            await refresh_user_menu_buttons(bot, button)
         # Fill the descriptions only if they are empty, so text set in @BotFather is kept.
         if not (await bot.get_my_short_description()).short_description:
             await bot.set_my_short_description(SHORT_DESCRIPTION)
@@ -66,6 +67,25 @@ async def setup_profile(bot: Bot, settings: Settings):
             await bot.set_my_description(DESCRIPTION)
     except Exception as e:
         log.warning("Could not update the bot profile: %s", e)
+
+
+async def refresh_user_menu_buttons(bot: Bot, button: MenuButtonWebApp):
+    """Also set the button in every user's own chat. A button saved per chat (by an older copy on another
+    address) wins over the default one, so after a move to a new address users would still see the old link."""
+    from sqlalchemy import select
+    from .models import User
+    try:
+        async with db.session() as s:
+            ids = (await s.execute(select(User.telegram_id))).scalars().all()
+    except Exception as e:
+        log.warning("Could not list users for the menu button: %s", e)
+        return
+    for chat_id in ids:
+        try:
+            await bot.set_chat_menu_button(chat_id=chat_id, menu_button=button)
+        except Exception:
+            pass  # user blocked the bot, etc.
+        await asyncio.sleep(0.05)
 
 
 async def poll(bot: Bot, dp: Dispatcher, settings: Settings):
