@@ -4,7 +4,8 @@ from __future__ import annotations
 import html
 import logging
 from collections import defaultdict
-from datetime import date, timedelta
+import re
+from datetime import date, time, timedelta
 from decimal import Decimal
 from typing import Any, Awaitable, Callable
 from zoneinfo import available_timezones
@@ -12,7 +13,7 @@ from zoneinfo import available_timezones
 from aiogram import BaseMiddleware, Bot, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
-    BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
+    BufferedInputFile, CallbackQuery, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, Message,
     TelegramObject, WebAppInfo,
 )
 from sqlalchemy import select
@@ -20,7 +21,7 @@ from sqlalchemy import select
 from . import ai, db, fx, importers, ocr, services as sv
 from .config import get_settings
 from .models import ACCOUNT_TYPES, LIABILITY_TYPES, Receipt, ReceiptItem, ReportSchedule, Transaction, User
-from .parser import parse_entry
+from .parser import parse_entry, parse_time
 from .reports import build_report
 
 log = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ HELP = """<b>How to log money</b>
 <code>500 bank>cash</code> → transfer between accounts
 <code>1000 usd>bank 1350000</code> → transfer with the amount received
 <code>45 groceries yesterday #trip</code> → date and tag
+<code>30k taxi yesterday 21:30</code> → added late: pick the date and time
 📷 Send a <b>receipt photo</b> or a <b>payment screenshot</b> (Click, Payme, bank app) → read and categorized
 📩 Forward a <b>bank SMS / notification</b> text → logged automatically
 📄 Send a bank <b>statement</b> (CSV or PDF) → imported without duplicates
@@ -103,6 +105,8 @@ def tx_line(t: Transaction) -> str:
     cat = f"{t.category.emoji} {t.category.name}" if t.category else ("🔁 Transfer" if t.type == "transfer" else "")
     what = t.merchant or t.note
     when = "today" if t.occurred_on == date.today() else t.occurred_on.strftime("%d %b")
+    if t.occurred_time:
+        when += f" {t.occurred_time:%H:%M}"
     sign = "+" if t.amount > 0 else ""
     return f"{cat} · <b>{sign}{sv.fmt(t.amount, t.currency)}</b> · {html.escape(t.account.name)} · {when}" + \
         (f"\n<i>{html.escape(what)}</i>" if what else "")
@@ -112,7 +116,7 @@ def tx_kb(t: Transaction) -> InlineKeyboardMarkup:
     if t.type == "transfer":
         return kb([[("↩️ Undo", f"del:{t.id}")]])
     return kb([[("🗂 Category", f"cat:{t.id}"), ("🏦 Account", f"acc:{t.id}"),
-                ("📅 Date", f"date:{t.id}"), ("↩️ Undo", f"del:{t.id}")]])
+                ("📅 When", f"date:{t.id}"), ("↩️ Undo", f"del:{t.id}")]])
 
 
 async def require_user(msg: Message, user: User | None) -> bool:
@@ -543,8 +547,71 @@ async def cb_date(cb: CallbackQuery, user):
     today = sv.local_today(user)
     opts = [(("Today" if i == 0 else "Yesterday" if i == 1 else (today - timedelta(days=i)).strftime("%a %d")),
              f"setdate:{tid}:{i}") for i in range(0, 7)]
-    await cb.message.edit_reply_markup(reply_markup=kb([opts[:4], opts[4:]]))
+    await cb.message.edit_reply_markup(reply_markup=kb([opts[:4], opts[4:], [("🕐 Set the time", f"time:{tid}")]]))
     await cb.answer()
+
+
+TIME_PROMPT = "🕐 What time was entry #{id}? Reply with the time, like 14:30 or 9pm."
+_TIME_PROMPT_RE = re.compile(r"entry #(\d+)\?")
+
+
+@router.callback_query(F.data.startswith("time:"))
+async def cb_time(cb: CallbackQuery):
+    tid = cb.data.split(":")[1]
+    quick = [(f"{h:02d}:00", f"settime:{tid}:{h:02d}00") for h in (9, 13, 19, 22)]
+    await cb.message.edit_reply_markup(reply_markup=kb([quick, [("⌨️ Type exact time", f"asktime:{tid}")]]))
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("asktime:"))
+async def cb_asktime(cb: CallbackQuery):
+    tid = cb.data.split(":")[1]
+    await cb.message.answer(TIME_PROMPT.format(id=tid),
+                            reply_markup=ForceReply(input_field_placeholder="14:30"))
+    await cb.answer()
+
+
+async def _set_time(s, user: User, tid: int, at: time) -> Transaction | None:
+    t = await s.get(Transaction, tid)
+    if not t or t.user_id != user.id:
+        return None
+    await sv.update_transaction(s, user, t, at=at)
+    await s.refresh(t, ["category", "account"])
+    return t
+
+
+@router.callback_query(F.data.startswith("settime:"))
+async def cb_settime(cb: CallbackQuery, s, user):
+    _, tid, hhmm = cb.data.split(":")
+    t = await _set_time(s, user, int(tid), time(int(hhmm[:2]), int(hhmm[2:])))
+    if t is None:
+        await cb.answer("Not found")
+        return
+    await cb.message.edit_text(tx_line(t), reply_markup=tx_kb(t))
+    await cb.answer("Time changed")
+
+
+def _is_time_reply(msg: Message) -> bool:
+    r = msg.reply_to_message
+    return bool(r and r.from_user and r.from_user.is_bot and r.text and r.text.startswith("🕐")
+                and _TIME_PROMPT_RE.search(r.text))
+
+
+@router.message(F.text, _is_time_reply)
+async def time_reply(msg: Message, s, user):
+    if not await require_user(msg, user):
+        return
+    tid = int(_TIME_PROMPT_RE.search(msg.reply_to_message.text)[1])
+    at = parse_time(msg.text)
+    if at is None:
+        await msg.answer("I couldn't read that time. Tap ⌨️ again and send it like <code>14:30</code> or "
+                         "<code>9pm</code>.")
+        return
+    t = await _set_time(s, user, tid, at)
+    if t is None:
+        await msg.answer("That entry is gone.")
+        return
+    await msg.answer("Time saved ✅\n" + tx_line(t), reply_markup=tx_kb(t))
 
 
 @router.callback_query(F.data.startswith("setdate:"))
@@ -845,7 +912,8 @@ async def text_entry(msg: Message, s, user):
             missing = entry.account if not src else entry.to_account
             await msg.answer(f"Unknown account '{html.escape(missing or '')}'. See /accounts.")
             return
-        out, inn = await sv.add_transfer(s, user, src, dst, entry.amount, entry.to_amount, entry.text, entry.on)
+        out, inn = await sv.add_transfer(s, user, src, dst, entry.amount, entry.to_amount, entry.text,
+                                         entry.on, entry.at)
         await msg.answer(f"🔁 {sv.fmt(entry.amount, src.currency)} {html.escape(src.name)} → "
                          f"{sv.fmt(inn.amount, dst.currency)} {html.escape(dst.name)}",
                          reply_markup=kb([[("↩️ Undo", f"del:{out.id}")]]))
@@ -864,7 +932,7 @@ async def text_entry(msg: Message, s, user):
             s, user, entry.text, entry.kind, ai.pick_category if ai.enabled() else None)
     try:
         t = await sv.add_transaction(s, user, acc, entry.kind, entry.amount, entry.currency, cat,
-                                     note=entry.text, tags=entry.tags, on=entry.on)
+                                     note=entry.text, tags=entry.tags, on=entry.on, at=entry.at)
     except fx.FxUnavailable:
         await msg.answer("Couldn't get an exchange rate right now. Try again in a minute.")
         return

@@ -7,7 +7,7 @@ import secrets
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -36,6 +36,33 @@ def local_today(user: User | None) -> date:
         return datetime.now(ZoneInfo(user.timezone or "UTC")).date() if user else date.today()
     except Exception:
         return date.today()
+
+
+def local_now(user: User | None) -> datetime:
+    """Current wall-clock time in the user's own timezone (naive)."""
+    try:
+        return datetime.now(ZoneInfo(user.timezone or "UTC")).replace(tzinfo=None) if user else datetime.now()
+    except Exception:
+        return datetime.now()
+
+
+def entry_time(user: User | None, on: date | None, at: time | None) -> time | None:
+    """Time of day to store: the one picked, else "now" when the entry is for today, else unknown."""
+    if at is not None:
+        return at.replace(second=0, microsecond=0)
+    now = local_now(user)
+    return now.time().replace(second=0, microsecond=0) if on is None or on == now.date() else None
+
+
+def filled_local(user: User | None, created_at: datetime | None) -> datetime | None:
+    """created_at is stored in UTC; show it in the user's timezone."""
+    if created_at is None:
+        return None
+    try:
+        from datetime import timezone
+        return created_at.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(user.timezone or "UTC")).replace(tzinfo=None)
+    except Exception:
+        return created_at
 
 
 # ---------- users ----------
@@ -156,8 +183,10 @@ async def add_transaction(s: AsyncSession, user: User, account: Account, kind: s
                           currency: str | None = None, category: Category | None = None,
                           note: str = "", merchant: str = "", tags: list | None = None,
                           on: date | None = None, created_via="text", external_ref: str | None = None,
-                          receipt_id: int | None = None) -> Transaction:
-    """kind: income | expense | adjustment. `amount` positive (adjustment may be signed)."""
+                          receipt_id: int | None = None, at: time | None = None) -> Transaction:
+    """kind: income | expense | adjustment. `amount` positive (adjustment may be signed).
+    `at` = time of day it happened (default: now if `on` is today)."""
+    at = entry_time(user, on, at)
     on = on or local_today(user)
     currency = (currency or account.currency).upper()
     signed = -abs(amount) if kind == "expense" else (abs(amount) if kind == "income" else amount)
@@ -167,7 +196,7 @@ async def add_transaction(s: AsyncSession, user: User, account: Account, kind: s
                      currency=currency, account_amount=acc_amount,
                      base_amount=(signed * rate).quantize(Decimal("0.0001")), fx_rate_to_base=rate,
                      category_id=category.id if category else None, note=note[:255],
-                     merchant=merchant[:120], tags=tags or [], occurred_on=on,
+                     merchant=merchant[:120], tags=tags or [], occurred_on=on, occurred_time=at,
                      created_via=created_via, external_ref=external_ref, receipt_id=receipt_id)
     s.add(tx)
     await s.flush()
@@ -178,11 +207,12 @@ async def add_transaction(s: AsyncSession, user: User, account: Account, kind: s
 
 async def add_transfer(s: AsyncSession, user: User, src: Account, dst: Account, amount: Decimal,
                        to_amount: Decimal | None = None, note: str = "",
-                       on: date | None = None) -> tuple[Transaction, Transaction]:
+                       on: date | None = None, at: time | None = None) -> tuple[Transaction, Transaction]:
     """Move money between own accounts. Not income or spending.
 
     `amount` is in src currency; `to_amount` (optional) is what arrived in dst currency,
     which records the real exchange rate you got."""
+    at = entry_time(user, on, at)
     on = on or local_today(user)
     group = str(uuid.uuid4())
     if to_amount is None:
@@ -192,12 +222,12 @@ async def add_transfer(s: AsyncSession, user: User, src: Account, dst: Account, 
     out = Transaction(user_id=user.id, account_id=src.id, type="transfer", amount=-amount,
                       currency=src.currency, account_amount=-amount,
                       base_amount=(-amount * rate_src).quantize(Decimal("0.0001")),
-                      fx_rate_to_base=rate_src, note=note or f"→ {dst.name}", occurred_on=on,
+                      fx_rate_to_base=rate_src, note=note or f"→ {dst.name}", occurred_on=on, occurred_time=at,
                       transfer_group=group)
     inn = Transaction(user_id=user.id, account_id=dst.id, type="transfer", amount=to_amount,
                       currency=dst.currency, account_amount=to_amount,
                       base_amount=(to_amount * rate_dst).quantize(Decimal("0.0001")),
-                      fx_rate_to_base=rate_dst, note=note or f"← {src.name}", occurred_on=on,
+                      fx_rate_to_base=rate_dst, note=note or f"← {src.name}", occurred_on=on, occurred_time=at,
                       transfer_group=group)
     s.add_all([out, inn])
     await s.flush()
@@ -222,7 +252,8 @@ async def _debt_record(s: AsyncSession, user: User, debt: Account, amount: Decim
     rate = await fx.get_rate(s, debt.currency, user.base_currency, on)
     t = Transaction(user_id=user.id, account_id=debt.id, type="debt", amount=amount, currency=debt.currency,
                     account_amount=amount, base_amount=(amount * rate).quantize(Decimal("0.0001")),
-                    fx_rate_to_base=rate, note=note, occurred_on=on, created_via="app")
+                    fx_rate_to_base=rate, note=note, occurred_on=on, occurred_time=entry_time(user, on, None),
+                    created_via="app")
     s.add(t)
     await s.flush()
     await s.refresh(t, ["category", "account"])
@@ -409,12 +440,16 @@ async def find_duplicate(s: AsyncSession, user: User, amount: Decimal, currency:
 async def update_transaction(s: AsyncSession, user: User, t: Transaction, *, kind: str | None = None,
                              amount: Decimal | None = None, currency: str | None = None,
                              account: Account | None = None, category: Category | None = None,
-                             on: date | None = None, note: str | None = None) -> str:
+                             on: date | None = None, note: str | None = None,
+                             at: time | None = None) -> str:
     """Edit an entry. The full old version goes to the audit log first. Returns what changed.
 
     Income/expense: anything can change (amounts are re-converted at that day's rate).
-    Transfers: only the date and note (on both sides); delete and re-add to change amounts."""
+    Transfers: only the date, time and note (on both sides); delete and re-add to change amounts."""
     changes = []
+    at = at.replace(second=0, microsecond=0) if at is not None else None
+    if at is not None and at != t.occurred_time:
+        changes.append(f"time {t.occurred_time.strftime('%H:%M') if t.occurred_time else '-'} -> {at:%H:%M}")
     if t.type == "transfer":
         legs = (await s.execute(select(Transaction).where(
             Transaction.transfer_group == t.transfer_group))).unique().scalars().all()
@@ -426,6 +461,8 @@ async def update_transaction(s: AsyncSession, user: User, t: Transaction, *, kin
             for leg in legs:
                 await audit(s, user, "update", leg, "; ".join(changes))
                 leg.occurred_on = on or leg.occurred_on
+                if at is not None:
+                    leg.occurred_time = at
                 if note is not None:
                     leg.note = note[:255]
         await s.flush()
@@ -470,6 +507,8 @@ async def update_transaction(s: AsyncSession, user: User, t: Transaction, *, kin
             new_kind, signed, new_currency, new_account.id, new_on)
     if note is not None:
         t.note = note.strip()[:255]
+    if at is not None:
+        t.occurred_time = at
     if category is not None and category.id != t.category_id:
         t.category_id = category.id
         if t.merchant or t.note:
@@ -718,18 +757,23 @@ async def export_csv(s: AsyncSession, user: User, start: date | None = None, end
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["id", "date", "type", "account", "amount", "currency", "account_amount",
-                f"amount_{user.base_currency}", "category", "merchant", "note", "tags", "source"])
+                f"amount_{user.base_currency}", "category", "merchant", "note", "tags", "source",
+                "time", "filled_in"])
     for t in rows:
         w.writerow([t.id, t.occurred_on, t.type, t.account.name, t.amount, t.currency, t.account_amount,
                     t.base_amount, t.category.name if t.category else "", t.merchant, t.note,
-                    " ".join(t.tags or []), t.created_via])
+                    " ".join(t.tags or []), t.created_via,
+                    t.occurred_time.strftime("%H:%M") if t.occurred_time else "",
+                    f"{filled_local(user, t.created_at):%Y-%m-%d %H:%M}" if t.created_at else ""])
     return buf.getvalue().encode("utf-8-sig")
 
 
 # ---------- accountability: audit log, snapshots, statements, backups ----------
 
 def tx_dict(t: Transaction) -> dict:
-    return {"id": t.id, "date": str(t.occurred_on), "type": t.type, "account_id": t.account_id,
+    return {"id": t.id, "date": str(t.occurred_on),
+            "time": t.occurred_time.strftime("%H:%M") if t.occurred_time else None,
+            "type": t.type, "account_id": t.account_id,
             "amount": str(t.amount), "currency": t.currency, "account_amount": str(t.account_amount),
             "base_amount": str(t.base_amount), "category_id": t.category_id, "merchant": t.merchant,
             "note": t.note, "tags": t.tags, "source": t.created_via, "transfer_group": t.transfer_group}

@@ -44,6 +44,11 @@ async def test_old_database_gets_new_columns(tmp_path):
                           "type VARCHAR(20), currency VARCHAR(3), opening_balance NUMERIC(18,4))"))
         c.execute(sa.text("INSERT INTO users (id, telegram_id, name, base_currency, timezone) VALUES (1, 9, 'A', 'USD', 'UTC')"))
         c.execute(sa.text("INSERT INTO accounts VALUES (1, 1, 'Cash', 'cash', 'USD', 10)"))
+        c.execute(sa.text("CREATE TABLE transactions (id INTEGER PRIMARY KEY, user_id INTEGER, account_id INTEGER, "
+                          "type VARCHAR(12), amount NUMERIC(18,4), currency VARCHAR(3), account_amount NUMERIC(18,4), "
+                          "base_amount NUMERIC(18,4), occurred_on DATE, created_at DATETIME)"))
+        c.execute(sa.text("INSERT INTO transactions VALUES (1, 1, 1, 'expense', -5, 'USD', -5, -5, '2026-01-02', "
+                          "'2026-01-02 10:00:00')"))
     eng.dispose()
 
     db.init_engine(f"sqlite+aiosqlite:///{path}")
@@ -55,6 +60,9 @@ async def test_old_database_gets_new_columns(tmp_path):
         assert acc.archived is False and acc.include_in_net_worth is True  # added with their defaults
         assert user.language == "en"
         assert float(acc.opening_balance) == 10  # existing data untouched
+        from app.models import Transaction
+        old_tx = await s.get(Transaction, 1)
+        assert old_tx.occurred_time is None and float(old_tx.amount) == -5  # old entry kept, time unknown
     await db.create_all()  # running again changes nothing
 
 

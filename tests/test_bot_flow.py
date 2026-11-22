@@ -196,3 +196,32 @@ async def test_receipt_with_free_ocr(env, monkeypatch):
         photo=[PhotoSize(file_id="f", file_unique_id="u", width=1, height=1)])))
     out = texts(sess)
     assert "47,400.00 UZS" in out and "Groceries" in out and "Personal care" in out
+
+
+async def test_late_entry_time(env):
+    from app import db
+    from app.models import Transaction
+    from sqlalchemy import select
+    b, dp, sess = env
+    await dp.feed_update(b, msg("/start USD"))
+    texts(sess)
+    await dp.feed_update(b, msg("30 taxi yesterday 21:30"))
+    assert "21:30" in texts(sess)
+    await dp.feed_update(b, msg("35 coffee"))  # live entry: time of now is saved
+    texts(sess)
+    async with db.session() as s:
+        late, live = (await s.execute(select(Transaction).order_by(Transaction.id))).unique().scalars().all()
+    assert str(late.occurred_time) == "21:30:00" and live.occurred_time is not None and live.created_at
+    # pick a time with a button, then type an exact one as a reply
+    await dp.feed_update(b, cb(f"settime:{live.id}:0900"))
+    assert "09:00" in texts(sess)
+    global n
+    n += 1
+    prompt = Message(message_id=n, date=datetime.now(), chat=CHAT, from_user=TgUser(id=99, is_bot=True, first_name="B"),
+                     text=botmod.TIME_PROMPT.format(id=live.id))
+    n += 1
+    await dp.feed_update(b, Update(update_id=n, message=Message(message_id=n, date=datetime.now(), chat=CHAT,
+                                                                from_user=TG, text="7:45pm", reply_to_message=prompt)))
+    assert "Time saved" in texts(sess)
+    async with db.session() as s:
+        assert str((await s.get(Transaction, live.id)).occurred_time) == "19:45:00"
