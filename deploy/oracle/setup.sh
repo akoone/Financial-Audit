@@ -37,13 +37,16 @@ if ! sudo docker compose version >/dev/null 2>&1; then
 fi
 sudo systemctl enable --now docker >/dev/null 2>&1 || true
 
-# 4. Server firewall: Oracle's Ubuntu image blocks everything except SSH. Open 80 and 443 for HTTPS.
-say "Opening ports 80 and 443 in the server firewall"
-for p in 80 443; do
-  sudo iptables -C INPUT -p tcp --dport $p -j ACCEPT 2>/dev/null || sudo iptables -I INPUT 1 -p tcp --dport $p -j ACCEPT
-done
-sudo iptables -C INPUT -p udp --dport 443 -j ACCEPT 2>/dev/null || sudo iptables -I INPUT 1 -p udp --dport 443 -j ACCEPT
-if command -v netfilter-persistent >/dev/null; then sudo netfilter-persistent save >/dev/null 2>&1 || true; fi
+# 4. Server firewall: Oracle's Ubuntu image blocks everything except SSH (a REJECT rule). Open 80 and 443.
+#    Other clouds (Google) use their own firewall and leave the server's open, so this is skipped there.
+if sudo iptables -S INPUT 2>/dev/null | grep -q -- '-j REJECT'; then
+  say "Opening ports 80 and 443 in the server firewall"
+  for p in 80 443; do
+    sudo iptables -C INPUT -p tcp --dport $p -j ACCEPT 2>/dev/null || sudo iptables -I INPUT 1 -p tcp --dport $p -j ACCEPT || true
+  done
+  sudo iptables -C INPUT -p udp --dport 443 -j ACCEPT 2>/dev/null || sudo iptables -I INPUT 1 -p udp --dport 443 -j ACCEPT || true
+  if command -v netfilter-persistent >/dev/null; then sudo netfilter-persistent save >/dev/null 2>&1 || true; fi
+fi
 
 # 5. Settings (.env). Asks only for what's missing.
 if [ ! -f .env ]; then
