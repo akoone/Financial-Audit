@@ -9,6 +9,7 @@ It works for anyone who opens it. Every Telegram user gets their own separate da
 | Feature | How you use it |
 | --- | --- |
 | Quick entry | `35 coffee`, `12.5 usd taxi card`, `+3000 salary`, `45 groceries yesterday #trip` |
+| Time of each entry | Every entry keeps the time it happened and the time it was filled in. New entries get the current time. Added late? Write `30k taxi yesterday 21:30` (or `9pm`), tap **📅 When → 🕐 Set the time** under an entry in the chat, or pick Date and Time in the app's Add and edit screens. History shows the time on each row, and the entry details say when it was filled in. The CSV export has both |
 | Auto-categories | Guessed from keywords, then from your own corrections (it learns), then AI |
 | Transfers | `500 bank>cash`, or `1000 usd>bank 1350000` to record the amount you actually received |
 | Multi-currency | Log any currency. Daily exchange rates are used for totals in your base currency |

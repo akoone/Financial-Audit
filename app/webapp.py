@@ -13,7 +13,7 @@ import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, time as dtime, timedelta
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
@@ -176,6 +176,17 @@ async def _transaction(s: AsyncSession, user: User, tx_id: int) -> Transaction:
 
 # ---------- JSON shapes ----------
 
+def parse_time(raw) -> dtime | None:
+    """'14:30' / '9:05' -> time; empty -> None."""
+    raw = str(raw or "").strip()
+    if not raw:
+        return None
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})(?::\d{2})?", raw)
+    if not m or int(m[1]) > 23 or int(m[2]) > 59:
+        raise HTTPException(422, "Time must look like 14:30")
+    return dtime(int(m[1]), int(m[2]))
+
+
 def tx_json(t: Transaction, peer: Transaction | None = None) -> dict:
     emoji = t.category.emoji if t.category else {"transfer": "🔁", "adjustment": "⚖️", "debt": "🤝"}.get(t.type, "•")
     d = {"id": t.id, "date": str(t.occurred_on), "type": t.type, "amount": _f(t.amount), "currency": t.currency,
@@ -183,6 +194,7 @@ def tx_json(t: Transaction, peer: Transaction | None = None) -> dict:
          "account_currency": t.account.currency, "category_id": t.category_id,
          "category": t.category.name if t.category else "", "emoji": emoji, "note": t.note,
          "merchant": t.merchant, "tags": t.tags or [], "source": t.created_via,
+         "time": t.occurred_time.strftime("%H:%M") if t.occurred_time else None,
          "created_at": t.created_at.isoformat() if t.created_at else None}
     for x in filter(None, (t, peer)):
         if x.account.type in ("receivable", "debt"):
@@ -414,7 +426,8 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
             cond.append(or_(Transaction.note.ilike(like), Transaction.merchant.ilike(like), Category.name.ilike(like)))
         limit = max(1, min(limit, 500))
         base_q = select(Transaction).outerjoin(Category, Transaction.category_id == Category.id).where(*cond)
-        rows = (await s.execute(base_q.order_by(Transaction.occurred_on.desc(), Transaction.id.desc())
+        rows = (await s.execute(base_q.order_by(Transaction.occurred_on.desc(),
+                                                Transaction.occurred_time.desc().nulls_last(), Transaction.id.desc())
                                 .limit(limit + 1).offset(max(offset, 0)))).unique().scalars().all()
         has_more = len(rows) > limit
         rows = rows[:limit]
@@ -461,6 +474,7 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
         if acc is None:
             raise HTTPException(422, "Pick an account")
         on = parse_day(body["date"], today) if body.get("date") else today
+        at = parse_time(body.get("time"))
         note = str(body.get("note") or "").strip()[:255]
         try:
             if kind == "transfer":
@@ -468,7 +482,7 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
                 if dst.id == acc.id:
                     raise HTTPException(422, "Pick two different accounts")
                 to_amount = parse_number(body["to_amount"]) if body.get("to_amount") not in (None, "") else None
-                out, inn = await sv.add_transfer(s, user, acc, dst, amount, to_amount, note, on)
+                out, inn = await sv.add_transfer(s, user, acc, dst, amount, to_amount, note, on, at)
                 await s.commit()
                 return {"ok": True, "transaction": tx_json(out, inn)}
             currency = parse_currency(body.get("currency"), acc.currency)
@@ -481,7 +495,8 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
             else:
                 cat, _ = await sv.guess_category(s, user, note, kind)
             t = await sv.add_transaction(s, user, acc, kind, amount, currency, cat, note=note,
-                                         merchant=str(body.get("merchant") or "")[:120], on=on, created_via="app")
+                                         merchant=str(body.get("merchant") or "")[:120], on=on, created_via="app",
+                                         at=at)
         except fx.FxUnavailable:
             raise HTTPException(503, "Couldn't get an exchange rate right now. Try again in a minute.")
         await s.commit()
@@ -505,6 +520,8 @@ def create_app(bot: Bot | None = None, dp: Dispatcher | None = None) -> FastAPI:
             kw["category"] = await _category(s, user, body["category_id"])
         if body.get("date"):
             kw["on"] = parse_day(body["date"], today)
+        if body.get("time"):
+            kw["at"] = parse_time(body["time"])
         if "note" in body:
             kw["note"] = str(body.get("note") or "")
         try:

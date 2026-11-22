@@ -74,3 +74,18 @@ def test_neon_url_normalized():
     assert u == "postgresql+asyncpg://u:p@ep-x.eu-central-1.aws.neon.tech/neondb?ssl=require"
     assert normalize_url("postgres://u:p@h/db") == "postgresql+asyncpg://u:p@h/db"
     assert normalize_url("sqlite+aiosqlite:///./data/x.db") == "sqlite+aiosqlite:///./data/x.db"
+
+
+def test_time_of_day_for_late_entries():
+    from datetime import time
+    from app.parser import parse_time
+    today = date(2026, 11, 22)
+    e = parse_entry("50k lunch yesterday 13:30", today=today)
+    assert e.amount == 50000 and e.words == ["lunch"] and e.on == date(2026, 11, 21) and e.at == time(13, 30)
+    e = parse_entry("spent 20000 on taxi at 9pm", today=today)
+    assert e.amount == 20000 and e.words == ["taxi"] and e.at == time(21, 0)
+    assert parse_entry("35 coffee", today=today).at is None
+    assert parse_entry("100 card>cash 8:05", {"card", "cash"}, today=today).at == time(8, 5)
+    assert parse_time("12am") == time(0, 0) and parse_time("12pm") == time(12, 0)
+    for bad in ("25:00", "9", "13pm", "12:75", "abc"):
+        assert parse_time(bad) is None

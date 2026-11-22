@@ -1216,6 +1216,7 @@ function txRow(t) {
     amt = (t.type === "income" ? "+" : "−") + num(t.amount) + " " + t.currency;
     cls = t.type === "income" ? "pos" : "";
   }
+  sub = [t.time, sub].filter(Boolean).join(" · ");
   const conv = t.currency !== c && t.type !== "transfer" ? `<div class="sub">≈ ${esc(money(Math.abs(t.base_amount), c))}</div>` : "";
   return `<button type="button" class="row tx" data-tx="${t.id}"><span class="ico" aria-hidden="true">${esc(t.emoji)}</span>
     <span class="main"><div class="t">${esc(title)}</div><div class="sub">${esc(sub)}</div></span>
@@ -1234,13 +1235,13 @@ async function openTx(id) {
   let t;
   try { t = await api(`/api/transactions/${id}`); } catch (e) { toast(e.message); return; }
   const when = t.created_at ? new Date(t.created_at.replace(" ", "T") + (t.created_at.includes("+") || t.created_at.endsWith("Z") ? "" : "Z")) : null;
-  const details = `<div class="muted small" style="margin:14px 4px 0">Added from ${esc(SOURCES[t.source] || t.source)}${when && !isNaN(when) ? " · " + esc(when.toLocaleString(undefined, {day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit"})) : ""}</div>
+  const details = `<div class="muted small" style="margin:14px 4px 0">${when && !isNaN(when) ? "Filled in " + esc(when.toLocaleString(undefined, {day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit"})) + " · " : ""}from ${esc(SOURCES[t.source] || t.source)}</div>
     ${t.history.filter(x => x.action !== "create").length ? `<div class="card" style="margin-top:10px"><h3>Change history</h3>${t.history.filter(x => x.action !== "create").map(x =>
       `<div class="hist-item"><b>${esc(x.action === "update" ? "Edited" : x.action === "delete" ? "Deleted" : x.action)}</b> ${esc(x.detail)}<div class="muted">${x.at ? esc(new Date(x.at.replace(" ", "T") + "Z").toLocaleString()) : ""}</div></div>`).join("")}</div>` : ""}`;
   if (t.debt_id) return openDebt(t.debt_id);
   if (t.type === "transfer") return openTransfer(t, details);
   const st = {type: t.type, amount: String(Math.abs(t.amount)), currency: t.currency, category_id: t.category_id,
-              account_id: t.account_id, date: t.date, note: t.note};
+              account_id: t.account_id, date: t.date, time: t.time || "", note: t.note};
   if (t.type === "adjustment") st.amount = String(t.amount);
   const draw = () => {
     const cats = st.type === "adjustment" ? [] : S.me.categories[st.type];
@@ -1250,7 +1251,9 @@ async function openTx(id) {
         <select id="e-cur" aria-label="Currency">${curOptions(st.currency)}</select></div>
       ${cats.length ? `<div class="field"><span class="label">Category</span><div class="chips">${cats.map(x => `<button type="button" class="chip ${x.id === st.category_id ? "on" : ""}" data-cat="${x.id}">${esc(x.emoji)} ${esc(x.name)}</button>`).join("")}</div></div>` : ""}
       <div class="field"><span class="label">Account</span><div class="chips scroll">${accChips(spendable(), st.account_id)}</div></div>
-      <div class="field"><label class="label" for="e-date">Date</label><input class="inp" type="date" id="e-date" value="${st.date}" max="${todayIso()}"></div>
+      <div class="btn-row" style="margin-top:14px">
+        <div class="grow"><label class="label" for="e-date">Date</label><input class="inp" type="date" id="e-date" value="${st.date}" max="${todayIso()}"></div>
+        <div class="grow"><label class="label" for="e-time">Time</label><input class="inp" type="time" id="e-time" value="${esc(st.time)}"></div></div>
       <div class="field"><label class="label" for="e-note">Note</label><input class="inp" id="e-note" value="${esc(st.note)}" autocomplete="off"></div>
       <div class="btn-row"><button class="btn danger" id="e-del">Delete</button><button class="btn" id="e-save">Save</button></div>${details}`, root => {
       $$("#e-type button", root).forEach(b => b.onclick = () => { if (st.type !== b.dataset.k) { st.type = b.dataset.k; st.category_id = null; keep(); draw(); } });
@@ -1270,6 +1273,7 @@ async function openTx(id) {
         if (st.category_id && st.category_id !== t.category_id) body.category_id = st.category_id;
         if (st.account_id !== t.account_id) body.account_id = st.account_id;
         if (st.date !== t.date) body.date = st.date;
+        if (st.time && st.time !== (t.time || "")) body.time = st.time;
         if (st.note !== t.note) body.note = st.note;
         if (!Object.keys(body).length) { closeSheet(); return; }
         e.target.disabled = true;
@@ -1282,7 +1286,7 @@ async function openTx(id) {
     const r = $("#sheet-body");
     if (!$("#e-amount", r)) return;
     st.amount = $("#e-amount", r).value.trim(); st.currency = $("#e-cur", r).value;
-    st.date = $("#e-date", r).value || st.date; st.note = $("#e-note", r).value;
+    st.date = $("#e-date", r).value || st.date; st.time = $("#e-time", r).value; st.note = $("#e-note", r).value;
   };
   draw();
 }
@@ -1291,7 +1295,9 @@ function openTransfer(t, details) {
   openSheet(`<h2><span class="ico">🔁</span>${esc(t.account)} → ${esc(t.to_account || "")}</h2>
     <div class="card"><div class="kv"><span class="k">Sent</span><span>${esc(money(Math.abs(t.amount), t.currency))}</span></div>
       <div class="kv"><span class="k">Received</span><span>${esc(money(Math.abs(t.to_amount || 0), t.to_currency || ""))}</span></div></div>
-    <div class="field"><label class="label" for="t-date">Date</label><input class="inp" type="date" id="t-date" value="${t.date}" max="${todayIso()}"></div>
+    <div class="btn-row" style="margin-top:14px">
+      <div class="grow"><label class="label" for="t-date">Date</label><input class="inp" type="date" id="t-date" value="${t.date}" max="${todayIso()}"></div>
+      <div class="grow"><label class="label" for="t-time">Time</label><input class="inp" type="time" id="t-time" value="${esc(t.time || "")}"></div></div>
     <div class="field"><label class="label" for="t-note">Note</label><input class="inp" id="t-note" value="${esc(/^[→←]/.test(t.note) ? "" : t.note)}" autocomplete="off"></div>
     <div class="muted small" style="margin:8px 4px 0">To change the amounts, delete this transfer and add it again.</div>
     <div class="btn-row"><button class="btn danger" id="t-del">Delete</button><button class="btn" id="t-save">Save</button></div>${details}`, root => {
@@ -1302,6 +1308,7 @@ function openTransfer(t, details) {
     };
     $("#t-save", root).onclick = async () => {
       const body = {date: $("#t-date", root).value, note: $("#t-note", root).value};
+      if ($("#t-time", root).value) body.time = $("#t-time", root).value;
       try { await api(`/api/transactions/${t.id}`, {method: "PATCH", body}); closeSheet(); toast("Saved"); await afterChange(); show(S.view); }
       catch (e) { toast(e.message); }
     };
@@ -1373,7 +1380,7 @@ function addDefaults() {
   const accs = spendable(), def = accs.find(a => a.default) || accs[0];
   const other = accs.find(a => !def || a.id !== def.id);
   return {type: "expense", amount: "", currency: def ? def.currency : baseCur(), curPicked: false, category_id: null, catPicked: false,
-          account_id: def && def.id, to_account_id: other && other.id, to_amount: "", note: "", merchant: "", date: todayIso()};
+          account_id: def && def.id, to_account_id: other && other.id, to_amount: "", note: "", merchant: "", date: todayIso(), time: ""};
 }
 let guessTimer = null;
 function renderAdd() {
@@ -1406,6 +1413,9 @@ function renderAdd() {
       <button type="button" class="chip ${a.date === todayIso() ? "on" : ""}" data-d="0">Today</button>
       <button type="button" class="chip ${a.date === yesterdayIso() ? "on" : ""}" data-d="1">Yesterday</button>
       <input class="chip date ${other ? "on" : ""}" type="date" id="a-day" value="${a.date}" max="${todayIso()}" aria-label="Another date"></div></div>
+    <div class="field"><label class="label" for="a-time">Time</label>
+      <input class="inp" type="time" id="a-time" value="${esc(a.time || "")}">
+      <div class="muted small" style="margin:6px 4px 0">${a.date === todayIso() ? "Leave empty to use the time right now. Adding it late? Pick when it happened." : "When did it happen? Optional."}</div></div>
     <button class="btn" id="a-save" style="margin-top:20px">Save</button>
     <div class="muted small" style="text-align:center;margin-top:10px">Tip: you can also just type <b>50k lunch</b> in the chat.</div>`;
   $$("#a-type button", el).forEach(b => b.onclick = () => {
@@ -1431,6 +1441,7 @@ function renderAdd() {
   $("#a-note", el).oninput = e => { a.note = e.target.value; a.merchant = ""; clearTimeout(guessTimer); guessTimer = setTimeout(guessCategory, 350); };
   $$("#a-date [data-d]", el).forEach(b => b.onclick = () => { a.date = b.dataset.d === "0" ? todayIso() : yesterdayIso(); renderAdd(); });
   $("#a-day", el).onchange = e => { if (e.target.value) { a.date = e.target.value; renderAdd(); } };
+  $("#a-time", el).onchange = e => { a.time = e.target.value; };
   $("#a-save", el).onclick = saveAdd;
   $("#a-debt", el).onclick = () => openNewDebt();
   if ($("#a-cat-new", el)) {
@@ -1523,6 +1534,7 @@ async function saveAdd(e) {
   const a = S.add;
   if (!a.amount.trim()) { toast("Enter an amount first"); $("#a-amount").focus(); return; }
   const body = {type: a.type, amount: a.amount, account_id: a.account_id, note: a.note.trim(), date: a.date};
+  if (a.time) body.time = a.time;
   if (a.type === "transfer") {
     if (!a.to_account_id) { toast("Add a second account first (Accounts tab)"); return; }
     body.to_account_id = a.to_account_id;

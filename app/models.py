@@ -1,12 +1,12 @@
 """Database schema. Money is stored as Numeric (exact decimals), never floats."""
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text,
-    UniqueConstraint, func,
+    Time, UniqueConstraint, func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -101,6 +101,10 @@ class Transaction(Base):
     merchant: Mapped[str] = mapped_column(String(120), default="")
     tags: Mapped[list] = mapped_column(JSON, default=list)
     occurred_on: Mapped[date] = mapped_column(Date, index=True)
+    # Local time of day the money moved (user's timezone). Set to "now" for live entries, picked by
+    # the user for late ones, empty for old rows and imports with no time. created_at below is
+    # when the entry was filled in (UTC) and never changes.
+    occurred_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     transfer_group: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     receipt_id: Mapped[int | None] = mapped_column(ForeignKey("receipts.id"), nullable=True)
     external_ref: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)

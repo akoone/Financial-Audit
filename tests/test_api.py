@@ -450,3 +450,29 @@ async def test_work_notes(client, s):
     assert r.json()["minutes"] == 0
     assert (await client.delete(f"/api/notes/{n['id']}")).json()["ok"]
     assert len((await client.get("/api/notes")).json()["items"]) == 1
+
+
+async def test_entry_time_and_filled_in(client, s):
+    await client.post("/api/setup", json={"currency": "USD", "timezone": "UTC"})
+    r = await client.post("/api/transactions", json={"type": "expense", "amount": "10", "note": "coffee"})
+    now_tx = r.json()["transaction"]
+    assert now_tx["time"] and now_tx["created_at"]  # today: time of now, plus when it was filled in
+    r = await client.post("/api/transactions", json={"type": "expense", "amount": "20", "note": "taxi",
+                                                       "date": "2026-01-10", "time": "21:40"})
+    late = r.json()["transaction"]
+    assert late["date"] == "2026-01-10" and late["time"] == "21:40"
+    r = await client.post("/api/transactions", json={"type": "expense", "amount": "5", "date": "2026-01-10"})
+    assert r.json()["transaction"]["time"] is None  # past day, no time given
+    assert (await client.post("/api/transactions", json={"type": "expense", "amount": "5", "time": "25:00"})).status_code == 422
+    r = await client.patch(f"/api/transactions/{late['id']}", json={"time": "08:15"})
+    assert r.json()["transaction"]["time"] == "08:15" and "time 21:40 -> 08:15" in r.json()["changed"]
+    items = (await client.get("/api/transactions", params={"month": "2026-01"})).json()["items"]
+    assert [i["time"] for i in items] == ["08:15", None]  # later in the day first, no time last
+    me = (await client.get("/api/me")).json()
+    cash, bank = me["accounts"][0]["id"], me["accounts"][1]["id"]
+    r = await client.post("/api/transactions", json={"type": "transfer", "amount": "3", "account_id": cash,
+                                                       "to_account_id": bank, "date": "2026-01-11", "time": "10:00"})
+    tr = r.json()["transaction"]
+    assert tr["time"] == "10:00"
+    r = await client.patch(f"/api/transactions/{tr['id']}", json={"time": "11:30"})
+    assert r.json()["transaction"]["time"] == "11:30"

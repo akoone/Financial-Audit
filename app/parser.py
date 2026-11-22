@@ -4,6 +4,7 @@ Grammar (order of words after the amount is free):
   [+]<amount>[currency] words...         expense, or income with '+' / income keyword
   <amount> <from>><to> [received]        transfer between accounts (received = amount in target currency)
   today | yesterday | YYYY-MM-DD | DD.MM  date
+  14:30 | 9:05 | 9pm | 9:30am             time of day (for entries added late)
   #tag                                   tag
   <account name>                         account to use
 """
@@ -11,7 +12,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 from decimal import Decimal, InvalidOperation
 
 CURRENCY_SYMBOLS = {"$": "USD", "€": "EUR", "£": "GBP", "₩": "KRW", "₺": "TRY", "¥": "JPY",
@@ -43,6 +44,7 @@ class ParsedEntry:
     to_amount: Decimal | None = None
     tags: list[str] = field(default_factory=list)
     on: date | None = None
+    at: time | None = None  # time of day, when written
     free_form: bool = False  # amount was not the first word (natural sentence)
 
     @property
@@ -91,6 +93,24 @@ def _parse_date(token: str, today: date) -> date | None:
     return None
 
 
+_TIME_RE = re.compile(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?")
+
+
+def parse_time(token: str) -> time | None:
+    """'14:30', '9:05', '9pm', '9:30am' -> time. A bare number is not a time (it's an amount)."""
+    m = _TIME_RE.fullmatch(token.strip().lower())
+    if not m or (m[2] is None and m[3] is None):
+        return None
+    h, mi = int(m[1]), int(m[2] or 0)
+    if m[3]:
+        if not 1 <= h <= 12:
+            return None
+        h = h % 12 + (12 if m[3] == "pm" else 0)
+    if h > 23 or mi > 59:
+        return None
+    return time(h, mi)
+
+
 def _currency(token: str) -> str | None:
     if token in CURRENCY_SYMBOLS:
         return CURRENCY_SYMBOLS[token]
@@ -112,7 +132,7 @@ def parse_entry(text: str, account_names: set[str] | None = None,
     if not m:
         # Natural sentence like "spent 50k on lunch": find the amount anywhere
         for i, tok in enumerate(tokens[1:], 1):
-            if ">" in tok or _parse_date(tok, today):
+            if ">" in tok or _parse_date(tok, today) or parse_time(tok):
                 continue
             if (m := _AMOUNT_RE.match(tok)) and parse_amount(m.group(3)):
                 tokens = [tok] + tokens[:i] + tokens[i + 1:]
@@ -155,6 +175,8 @@ def parse_entry(text: str, account_names: set[str] | None = None,
             entry.tags.append(tok[1:].lower())
         elif (d := _parse_date(tok, today)) is not None:
             entry.on = d
+        elif entry.at is None and (tm := parse_time(tok)) is not None:
+            entry.at = tm
         elif entry.currency is None and _currency(tok) and not entry.words:
             entry.currency = _currency(tok)
         elif low in accounts and entry.account is None:
