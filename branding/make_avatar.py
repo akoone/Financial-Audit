@@ -53,7 +53,4 @@ d.ellipse(p(cx-R+10,cy-R+10,cx+R-10,cy+R-10),fill=(255,206,80))
 # plus mark on coin (income/expense neutral: check mark)
 d.line([tuple(p(cx-22,cy+2)),tuple(p(cx-6,cy+18)),tuple(p(cx+24,cy-16))],fill=(176,110,10),width=int(14*F),joint="curve")
 img=img.resize((640,640),Image.LANCZOS)
-img.save("bot-avatar.png")
-# circle preview
-m=Image.new("L",(640,640),0); ImageDraw.Draw(m).ellipse((0,0,639,639),fill=255)
-pv=Image.new("RGB",(640,640),(240,240,240)); pv.paste(img,(0,0),m); pv.save("preview-circle.png")
+img.save("app/static/bot-avatar.png")
