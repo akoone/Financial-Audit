@@ -14,7 +14,9 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
-from aiogram.types import BotCommand, MenuButtonWebApp, WebAppInfo
+from pathlib import Path
+
+from aiogram.types import BotCommand, FSInputFile, InputProfilePhotoStatic, MenuButtonWebApp, WebAppInfo
 
 from . import db, scheduler
 from .bot import UserMiddleware, router
@@ -67,6 +69,22 @@ async def setup_profile(bot: Bot, settings: Settings):
             await bot.set_my_description(DESCRIPTION)
     except Exception as e:
         log.warning("Could not update the bot profile: %s", e)
+    await set_profile_photo(bot)
+
+
+AVATAR = Path(__file__).parent / "static" / "bot-avatar.png"
+
+
+async def set_profile_photo(bot: Bot):
+    """Give the bot its profile photo if it has none, so a photo set in @BotFather is kept."""
+    try:
+        me = await bot.get_me()
+        if (await bot.get_user_profile_photos(me.id, limit=1)).total_count:
+            return
+        await bot.set_my_profile_photo(photo=InputProfilePhotoStatic(photo=FSInputFile(AVATAR)))
+        log.info("Set the bot's profile photo")
+    except Exception as e:
+        log.warning("Could not set the bot's profile photo: %s", e)
 
 
 async def refresh_user_menu_buttons(bot: Bot, button: MenuButtonWebApp):
